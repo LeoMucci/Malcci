@@ -1,96 +1,189 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { COLORS, RADIUS, MTYPE } from '@/constants/theme';
-import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
+import { COLORS, MTYPE, RADIUS } from '@/constants/theme';
+import { RELATIONSHIP_START_ISO } from '@/constants/config';
+import { FEED } from '@/constants/data';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { getErrorMessage } from '@/lib/errors';
+import { useToast } from '@/components/ui/toast';
+import type { AuthorRef, CalendarEventRow, MemoryType } from '@/types/domain';
 
-interface TimelineItem {
-  id: string | number;
+// Linhas cruas vindas do Supabase (select reduzido de memories).
+interface TimelineMemoryRow {
+  id: number;
+  title: string;
+  type: MemoryType;
+  description: string | null;
+  created_at: string;
+  author: AuthorRef | null;
+}
+
+// União discriminada dos itens exibidos na linha do tempo.
+interface TimelineBaseItem {
+  id: string;
   title: string;
   date: Date;
   dateLabel: string;
-  type: 'memory' | 'event';
-  category: string;
   description?: string;
+}
+
+interface TimelineMemoryItem extends TimelineBaseItem {
+  kind: 'memory';
+  category: MemoryType;
   author?: string;
 }
 
+interface TimelineEventItem extends TimelineBaseItem {
+  kind: 'event';
+  category: string | null;
+}
+
+type TimelineItem = TimelineMemoryItem | TimelineEventItem;
+
+const EVENT_BADGES: Record<string, { icon: string; color: string }> = {
+  anniversary: { icon: '💕', color: COLORS.accent },
+  birthday: { icon: '🎂', color: COLORS.blue },
+  special: { icon: '⭐', color: COLORS.gold },
+};
+const DEFAULT_EVENT_BADGE = { icon: '📌', color: COLORS.muted };
+
+const MEMORY_ICONS: Record<string, string> = {
+  restaurant: '🍽️',
+  movie: '🎬',
+  place: '🏖️',
+};
+const DEFAULT_MEMORY_ICON = '✨';
+
+function getBadge(item: TimelineItem): { icon: string; color: string } {
+  if (item.kind === 'event') {
+    return EVENT_BADGES[item.category ?? ''] ?? DEFAULT_EVENT_BADGE;
+  }
+  const meta = MTYPE[item.category] ?? MTYPE.other;
+  return { icon: MEMORY_ICONS[item.category] ?? DEFAULT_MEMORY_ICON, color: meta.color };
+}
+
+function formatDateLabel(date: Date): string {
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function buildTimeline(memories: TimelineMemoryRow[], events: CalendarEventRow[]): TimelineItem[] {
+  const memoryItems: TimelineItem[] = memories.map(memory => {
+    const date = new Date(memory.created_at);
+    return {
+      id: `m_${memory.id}`,
+      kind: 'memory',
+      title: memory.title,
+      date,
+      dateLabel: formatDateLabel(date),
+      category: memory.type,
+      description: memory.description ?? undefined,
+      author: memory.author?.display_name,
+    };
+  });
+
+  const eventItems: TimelineItem[] = events.map(event => {
+    const date = new Date(`${event.event_date}T12:00:00`);
+    return {
+      id: `e_${event.id}`,
+      kind: 'event',
+      title: event.title,
+      date,
+      dateLabel: formatDateLabel(date),
+      category: event.category,
+      description: event.description ?? undefined,
+    };
+  });
+
+  return [...memoryItems, ...eventItems].sort((a, b) => b.date.getTime() - a.date.getTime());
+}
+
+// Fallback local quando o Supabase não está configurado.
+const MOCK_MEMORY_DATES = ['2026-06-01', '2026-05-28', '2025-07-14', '2026-02-14'];
+
+const MOCK_MEMORY_ROWS: TimelineMemoryRow[] = FEED.map((entry, index) => ({
+  id: index + 1,
+  title: entry.title,
+  type: entry.cat as MemoryType,
+  description: entry.desc,
+  created_at: `${MOCK_MEMORY_DATES[index] ?? RELATIONSHIP_START_ISO}T12:00:00`,
+  author: { display_name: entry.by },
+}));
+
+const MOCK_EVENT_ROWS: CalendarEventRow[] = [
+  {
+    id: 1,
+    title: 'Início do namoro',
+    description: 'O dia em que tudo começou 💕',
+    event_date: RELATIONSHIP_START_ISO,
+    category: 'anniversary',
+  },
+];
+
 export default function TimelineScreen() {
-  const [items, setItems] = useState<TimelineItem[]>([]);
+  const { showToast } = useToast();
+  const [memories, setMemories] = useState<TimelineMemoryRow[]>([]);
+  const [events, setEvents] = useState<CalendarEventRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadTimeline = async () => {
+  const loadTimeline = useCallback(async () => {
     setLoading(true);
+
+    if (!isSupabaseConfigured) {
+      setMemories(MOCK_MEMORY_ROWS);
+      setEvents(MOCK_EVENT_ROWS);
+      setLoading(false);
+      return;
+    }
+
     try {
-      const combined: TimelineItem[] = [];
+      const [memoriesResult, eventsResult] = await Promise.all([
+        supabase
+          .from('memories')
+          .select('id, title, type, description, created_at, author:users(display_name)')
+          .order('created_at', { ascending: false })
+          .returns<TimelineMemoryRow[]>(),
+        supabase
+          .from('calendar_events')
+          .select('id, title, category, description, event_date')
+          .order('event_date', { ascending: false })
+          .returns<CalendarEventRow[]>(),
+      ]);
 
-      // 1. Fetch memories
-      const { data: mems } = await supabase
-        .from('memories')
-        .select('id, title, type, description, created_at, author:users(display_name)')
-        .order('created_at', { ascending: false });
+      if (memoriesResult.error) throw memoriesResult.error;
+      if (eventsResult.error) throw eventsResult.error;
 
-      if (mems) {
-        mems.forEach(m => {
-          combined.push({
-            id: `m_${m.id}`,
-            title: m.title,
-            date: new Date(m.created_at),
-            dateLabel: new Date(m.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }),
-            type: 'memory',
-            category: m.type,
-            description: m.description || undefined,
-            author: m.author?.display_name,
-          });
-        });
-      }
-
-      // 2. Fetch calendar events
-      const { data: events } = await supabase
-        .from('calendar_events')
-        .select('id, title, category, description, event_date')
-        .order('event_date', { ascending: false });
-
-      if (events) {
-        events.forEach(e => {
-          combined.push({
-            id: `e_${e.id}`,
-            title: e.title,
-            date: new Date(e.event_date + 'T12:00:00'),
-            dateLabel: new Date(e.event_date + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }),
-            type: 'event',
-            category: e.category,
-            description: e.description || undefined,
-          });
-        });
-      }
-
-      // Sort combined array by date descending
-      combined.sort((a, b) => b.date.getTime() - a.date.getTime());
-      setItems(combined);
+      setMemories(memoriesResult.data ?? []);
+      setEvents(eventsResult.data ?? []);
     } catch (e) {
-      console.error('Failed to build timeline:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar a linha do tempo.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
-    loadTimeline();
+    void loadTimeline();
+  }, [loadTimeline]);
+
+  const items = useMemo(() => buildTimeline(memories, events), [memories, events]);
+
+  const handleBack = useCallback(() => {
+    router.back();
   }, []);
 
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Header */}
+      {/* Cabeçalho */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.7}>
           <Text style={styles.backText}>‹ Voltar</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Nossa História</Text>
-        <View style={{ width: 50 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
       {loading ? (
@@ -101,39 +194,26 @@ export default function TimelineScreen() {
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.timelineContainer}>
-            {/* Vertical Line Connector */}
+            {/* Linha vertical conectora */}
             <View style={styles.verticalLine} />
 
-            {items.map((item, index) => {
-              const isEvent = item.type === 'event';
-              const meta = isEvent ? null : MTYPE[item.category] || MTYPE.other;
-              
-              let badgeColor = COLORS.accent;
-              let icon = '📸';
-
-              if (isEvent) {
-                icon = item.category === 'anniversary' ? '💕' : item.category === 'birthday' ? '🎂' : item.category === 'special' ? '⭐' : '📌';
-                badgeColor = item.category === 'anniversary' ? COLORS.accent : item.category === 'birthday' ? COLORS.blue : item.category === 'special' ? COLORS.gold : COLORS.muted;
-              } else if (meta) {
-                icon = item.category === 'restaurant' ? '🍽️' : item.category === 'movie' ? '🎬' : item.category === 'place' ? '🏖️' : '✨';
-                badgeColor = meta.color;
-              }
-
+            {items.map(item => {
+              const badge = getBadge(item);
               return (
                 <View key={item.id} style={styles.timelineNode}>
-                  {/* Timeline dot badge */}
-                  <View style={[styles.timelineDot, { backgroundColor: badgeColor }]}>
-                    <Text style={styles.dotIcon}>{icon}</Text>
+                  {/* Marcador na linha do tempo */}
+                  <View style={[styles.timelineDot, { backgroundColor: badge.color }]}>
+                    <Text style={styles.dotIcon}>{badge.icon}</Text>
                   </View>
 
-                  {/* Content bubble */}
+                  {/* Conteúdo */}
                   <View style={styles.timelineBubble}>
                     <Text style={styles.bubbleDate}>{item.dateLabel}</Text>
                     <Text style={styles.bubbleTitle}>{item.title}</Text>
                     {item.description ? (
                       <Text style={styles.bubbleDesc}>{item.description}</Text>
                     ) : null}
-                    {!isEvent && item.author ? (
+                    {item.kind === 'memory' && item.author ? (
                       <Text style={styles.bubbleAuthor}>Registrado por {item.author}</Text>
                     ) : null}
                   </View>
@@ -142,7 +222,9 @@ export default function TimelineScreen() {
             })}
 
             {items.length === 0 && (
-              <Text style={styles.empty}>Nenhum momento registrado na nossa história ainda. Adicione memórias ou datas para começar! 🌱</Text>
+              <Text style={styles.empty}>
+                Nenhum momento registrado na nossa história ainda. Adicione memórias ou datas para começar! 🌱
+              </Text>
             )}
           </View>
         </ScrollView>
@@ -161,6 +243,7 @@ const styles = StyleSheet.create({
   backBtn: { paddingVertical: 4 },
   backText: { color: COLORS.headerAccent, fontSize: 14, fontWeight: '500' },
   headerTitle: { fontSize: 18, fontStyle: 'italic', fontWeight: '500', color: COLORS.headerText },
+  headerSpacer: { width: 50 },
 
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { fontSize: 13, color: COLORS.muted, marginTop: 12 },
@@ -171,7 +254,7 @@ const styles = StyleSheet.create({
 
   timelineContainer: { position: 'relative', width: '100%', paddingLeft: 12 },
   verticalLine: { position: 'absolute', left: 24, top: 4, bottom: 4, width: 2, backgroundColor: COLORS.border },
-  
+
   timelineNode: { flexDirection: 'row', gap: 16, marginBottom: 20, alignItems: 'flex-start' },
   timelineDot: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', zIndex: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 2 },
   dotIcon: { fontSize: 13, color: '#fff' },

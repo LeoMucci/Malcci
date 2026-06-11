@@ -1,131 +1,231 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { COLORS, RADIUS } from '@/constants/theme';
-import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
+import { COLORS, RADIUS } from '@/constants/theme';
+import { RELATIONSHIP_START_ISO } from '@/constants/config';
+import { STATS as MOCK_STATS_BASE } from '@/constants/data';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { getErrorMessage } from '@/lib/errors';
+import { useToast } from '@/components/ui/toast';
+import type { MemoryType, MovieRow } from '@/types/domain';
+
+interface StatsSummary {
+  memories: number;
+  restaurants: number;
+  places: number;
+  movies: number;
+  diary: number;
+  wishes: number;
+  messages: number;
+  trips: number;
+  specialMemories: number;
+  shoppingMemories: number;
+  otherMemories: number;
+  movieMemories: number;
+  favMovie: string;
+  favRest: string;
+}
+
+const NO_FAV_MOVIE = 'Nenhum ainda 🍿';
+const NO_FAV_REST = 'Nenhum ainda 🍽️';
+const OTHER_BAR_COLOR = '#777';
+
+const EMPTY_STATS: StatsSummary = {
+  memories: 0,
+  restaurants: 0,
+  places: 0,
+  movies: 0,
+  diary: 0,
+  wishes: 0,
+  messages: 0,
+  trips: 0,
+  specialMemories: 0,
+  shoppingMemories: 0,
+  otherMemories: 0,
+  movieMemories: 0,
+  favMovie: NO_FAV_MOVIE,
+  favRest: NO_FAV_REST,
+};
+
+// Fallback local quando o Supabase não está configurado.
+const MOCK_STATS: StatsSummary = {
+  ...EMPTY_STATS,
+  memories: MOCK_STATS_BASE.memories,
+  restaurants: MOCK_STATS_BASE.restaurants,
+  movies: MOCK_STATS_BASE.movies,
+  trips: MOCK_STATS_BASE.trips,
+  places: 5,
+  diary: 6,
+  wishes: 4,
+  messages: 12,
+  specialMemories: 4,
+  movieMemories: 4,
+  shoppingMemories: 2,
+  otherMemories: 2,
+  favMovie: `${MOCK_STATS_BASE.favMovie} (5 ★)`,
+  favRest: `${MOCK_STATS_BASE.favRest} (5 ★)`,
+};
+
+async function countTable(table: string): Promise<number> {
+  const { count, error } = await supabase.from(table).select('*', { count: 'exact', head: true });
+  if (error) throw error;
+  return count ?? 0;
+}
+
+async function countMemoriesOfType(type: MemoryType): Promise<number> {
+  const { count, error } = await supabase
+    .from('memories')
+    .select('*', { count: 'exact', head: true })
+    .eq('type', type);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+type RatedRow = Pick<MovieRow, 'title' | 'rating'>;
+
+function formatFavorite(rows: RatedRow[] | null, emptyLabel: string): string {
+  const top = rows?.[0];
+  if (!top || !top.rating) return emptyLabel;
+  return `${top.title} (${top.rating} ★)`;
+}
 
 export default function StatsScreen() {
+  const { showToast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({
-    memories: 0,
-    restaurants: 0,
-    places: 0,
-    movies: 0,
-    diary: 0,
-    wishes: 0,
-    messages: 0,
-    trips: 0,
-    specialMemories: 0,
-    shoppingMemories: 0,
-    otherMemories: 0,
-    movieMemories: 0,
-    favMovie: 'Nenhum ainda 🍿',
-    favRest: 'Nenhum ainda 🍽️',
-  });
+  const [stats, setStats] = useState<StatsSummary>(EMPTY_STATS);
 
-  const loadStats = async () => {
+  const loadStats = useCallback(async () => {
     setLoading(true);
+
+    if (!isSupabaseConfigured) {
+      setStats(MOCK_STATS);
+      setLoading(false);
+      return;
+    }
+
     try {
-      // 1. Run counts in parallel
       const [
-        { count: memories },
-        { count: restaurants },
-        { count: places },
-        { count: movies },
-        { count: diary },
-        { count: wishes },
-        { count: messages },
-        { count: trips },
-        { count: specialMemories },
-        { count: shoppingMemories },
-        { count: otherMemories },
-        { count: movieMemories },
+        memories,
+        restaurants,
+        places,
+        movies,
+        diary,
+        wishes,
+        messages,
+        trips,
+        specialMemories,
+        shoppingMemories,
+        otherMemories,
+        movieMemories,
       ] = await Promise.all([
-        supabase.from('memories').select('*', { count: 'exact', head: true }),
-        supabase.from('memories').select('*', { count: 'exact', head: true }).eq('type', 'restaurant'),
-        supabase.from('memories').select('*', { count: 'exact', head: true }).eq('type', 'place'),
-        supabase.from('movies').select('*', { count: 'exact', head: true }),
-        supabase.from('diary_entries').select('*', { count: 'exact', head: true }),
-        supabase.from('cool_things').select('*', { count: 'exact', head: true }),
-        supabase.from('messages').select('*', { count: 'exact', head: true }),
-        supabase.from('trips').select('*', { count: 'exact', head: true }),
-        supabase.from('memories').select('*', { count: 'exact', head: true }).eq('type', 'special'),
-        supabase.from('memories').select('*', { count: 'exact', head: true }).eq('type', 'shopping'),
-        supabase.from('memories').select('*', { count: 'exact', head: true }).eq('type', 'other'),
-        supabase.from('memories').select('*', { count: 'exact', head: true }).eq('type', 'movie'),
+        countTable('memories'),
+        countMemoriesOfType('restaurant'),
+        countMemoriesOfType('place'),
+        countTable('movies'),
+        countTable('diary_entries'),
+        countTable('cool_things'),
+        countTable('messages'),
+        countTable('trips'),
+        countMemoriesOfType('special'),
+        countMemoriesOfType('shopping'),
+        countMemoriesOfType('other'),
+        countMemoriesOfType('movie'),
       ]);
 
-      // 2. Fetch top-rated movie
-      const { data: topMovie } = await supabase
-        .from('movies')
-        .select('title, rating')
-        .eq('watched', true)
-        .order('rating', { ascending: false })
-        .limit(1);
-
-      // 3. Fetch top-rated restaurant memory
-      const { data: topRestaurant } = await supabase
-        .from('memories')
-        .select('title, rating')
-        .eq('type', 'restaurant')
-        .order('rating', { ascending: false })
-        .limit(1);
-
-      const favMovieStr = topMovie && topMovie.length > 0 && topMovie[0].rating
-        ? `${topMovie[0].title} (${topMovie[0].rating} ★)`
-        : 'Nenhum ainda 🍿';
-
-      const favRestStr = topRestaurant && topRestaurant.length > 0 && topRestaurant[0].rating
-        ? `${topRestaurant[0].title} (${topRestaurant[0].rating} ★)`
-        : 'Nenhum ainda 🍽️';
+      const [topMovieResult, topRestaurantResult] = await Promise.all([
+        supabase
+          .from('movies')
+          .select('title, rating')
+          .eq('watched', true)
+          .order('rating', { ascending: false })
+          .limit(1)
+          .returns<RatedRow[]>(),
+        supabase
+          .from('memories')
+          .select('title, rating')
+          .eq('type', 'restaurant')
+          .order('rating', { ascending: false })
+          .limit(1)
+          .returns<RatedRow[]>(),
+      ]);
+      if (topMovieResult.error) throw topMovieResult.error;
+      if (topRestaurantResult.error) throw topRestaurantResult.error;
 
       setStats({
-        memories: memories || 0,
-        restaurants: restaurants || 0,
-        places: places || 0,
-        movies: movies || 0,
-        diary: diary || 0,
-        wishes: wishes || 0,
-        messages: messages || 0,
-        trips: trips || 0,
-        specialMemories: specialMemories || 0,
-        shoppingMemories: shoppingMemories || 0,
-        otherMemories: otherMemories || 0,
-        movieMemories: movieMemories || 0,
-        favMovie: favMovieStr,
-        favRest: favRestStr,
+        memories,
+        restaurants,
+        places,
+        movies,
+        diary,
+        wishes,
+        messages,
+        trips,
+        specialMemories,
+        shoppingMemories,
+        otherMemories,
+        movieMemories,
+        favMovie: formatFavorite(topMovieResult.data, NO_FAV_MOVIE),
+        favRest: formatFavorite(topRestaurantResult.data, NO_FAV_REST),
       });
     } catch (e) {
-      console.error('Failed to fetch statistics:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar as estatísticas.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
-    loadStats();
+    void loadStats();
+  }, [loadStats]);
+
+  const handleBack = useCallback(() => {
+    router.back();
   }, []);
 
-  const totalMemories = stats.memories || 1;
-  const pctRest = Math.round((stats.restaurants / totalMemories) * 100);
-  const pctPlaces = Math.round((stats.places / totalMemories) * 100);
-  const pctSpecial = Math.round((stats.specialMemories / totalMemories) * 100);
-  const pctMovies = Math.round((stats.movieMemories / totalMemories) * 100);
-  const pctShopping = Math.round((stats.shoppingMemories / totalMemories) * 100);
-  const pctOther = Math.round((stats.otherMemories / totalMemories) * 100);
+  const startDateLabel = useMemo(
+    () => new Date(`${RELATIONSHIP_START_ISO}T00:00:00`).toLocaleDateString('pt-BR'),
+    [],
+  );
+
+  const distribution = useMemo(() => {
+    const total = stats.memories || 1;
+    const pct = (count: number) => Math.round((count / total) * 100);
+    return [
+      { label: '🍽️ Restaurantes', count: stats.restaurants, pct: pct(stats.restaurants), color: COLORS.restaurant },
+      { label: '🏖️ Lugares', count: stats.places, pct: pct(stats.places), color: COLORS.place },
+      { label: '💖 Especiais', count: stats.specialMemories, pct: pct(stats.specialMemories), color: COLORS.accent },
+      { label: '🎬 Filmes Assistidos', count: stats.movieMemories, pct: pct(stats.movieMemories), color: COLORS.film },
+      { label: '🛍️ Compras & Presentes', count: stats.shoppingMemories, pct: pct(stats.shoppingMemories), color: COLORS.gold },
+      { label: '✨ Outros', count: stats.otherMemories, pct: pct(stats.otherMemories), color: OTHER_BAR_COLOR },
+    ];
+  }, [stats]);
+
+  const totals = useMemo(
+    () => [
+      { icon: '📸', label: 'Memórias', count: stats.memories, tint: COLORS.accentSoft },
+      { icon: '🍽️', label: 'Restaurantes', count: stats.restaurants, tint: COLORS.restaurantTint },
+      { icon: '🏖️', label: 'Lugares', count: stats.places, tint: COLORS.placeTint },
+      { icon: '🎬', label: 'Filmes & Séries', count: stats.movies, tint: COLORS.filmTint },
+      { icon: '📖', label: 'Diários', count: stats.diary, tint: '#e6f4ea' },
+      { icon: '🎁', label: 'Wishlist', count: stats.wishes, tint: COLORS.goldSoft },
+      { icon: '💌', label: 'Recados', count: stats.messages, tint: '#e3f2fd' },
+      { icon: '✈️', label: 'Viagens', count: stats.trips, tint: '#f5f5f5' },
+    ],
+    [stats],
+  );
 
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Header */}
+      {/* Cabeçalho */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.7}>
           <Text style={styles.backText}>‹ Voltar</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Resumo Geral</Text>
-        <View style={{ width: 50 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
       {loading ? (
@@ -136,13 +236,15 @@ export default function StatsScreen() {
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <Text style={styles.title}>Nossos Números 💕</Text>
-          <Text style={styles.subtitle}>Tudo o que construímos e registramos juntos desde 06/12/2024</Text>
+          <Text style={styles.subtitle}>
+            Tudo o que construímos e registramos juntos desde {startDateLabel}
+          </Text>
 
-          {/* Highlights section */}
+          {/* Destaques */}
           <View style={styles.highlightsContainer}>
             <View style={styles.highlightCard}>
               <Text style={styles.highlightEmoji}>🍽️</Text>
-              <View style={{ flex: 1 }}>
+              <View style={styles.flex1}>
                 <Text style={styles.highlightLabel}>Restaurante Favorito</Text>
                 <Text style={styles.highlightValue}>{stats.favRest}</Text>
               </View>
@@ -150,97 +252,40 @@ export default function StatsScreen() {
 
             <View style={styles.highlightCard}>
               <Text style={styles.highlightEmoji}>🎬</Text>
-              <View style={{ flex: 1 }}>
+              <View style={styles.flex1}>
                 <Text style={styles.highlightLabel}>Filme Favorito</Text>
                 <Text style={styles.highlightValue}>{stats.favMovie}</Text>
               </View>
             </View>
           </View>
 
-          {/* Visual Distribution Chart */}
+          {/* Distribuição por categoria */}
           <View style={styles.chartCard}>
             <Text style={styles.chartTitle}>Categorias de Memórias 📊</Text>
-            
-            <View style={styles.chartRow}>
-              <View style={styles.chartLabelRow}>
-                <Text style={styles.chartLabelText}>🍽️ Restaurantes</Text>
-                <Text style={styles.chartPctText}>{pctRest}% ({stats.restaurants})</Text>
-              </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${pctRest}%`, backgroundColor: '#b06a4e' }]} />
-              </View>
-            </View>
 
-            <View style={styles.chartRow}>
-              <View style={styles.chartLabelRow}>
-                <Text style={styles.chartLabelText}>🏖️ Lugares</Text>
-                <Text style={styles.chartPctText}>{pctPlaces}% ({stats.places})</Text>
+            {distribution.map(row => (
+              <View key={row.label} style={styles.chartRow}>
+                <View style={styles.chartLabelRow}>
+                  <Text style={styles.chartLabelText}>{row.label}</Text>
+                  <Text style={styles.chartPctText}>{row.pct}% ({row.count})</Text>
+                </View>
+                <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarFill, { width: `${row.pct}%`, backgroundColor: row.color }]} />
+                </View>
               </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${pctPlaces}%`, backgroundColor: '#477d50' }]} />
-              </View>
-            </View>
-
-            <View style={styles.chartRow}>
-              <View style={styles.chartLabelRow}>
-                <Text style={styles.chartLabelText}>💖 Especiais</Text>
-                <Text style={styles.chartPctText}>{pctSpecial}% ({stats.specialMemories})</Text>
-              </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${pctSpecial}%`, backgroundColor: COLORS.accent }]} />
-              </View>
-            </View>
-
-            <View style={styles.chartRow}>
-              <View style={styles.chartLabelRow}>
-                <Text style={styles.chartLabelText}>🎬 Filmes Assistidos</Text>
-                <Text style={styles.chartPctText}>{pctMovies}% ({stats.movieMemories})</Text>
-              </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${pctMovies}%`, backgroundColor: '#6a55b0' }]} />
-              </View>
-            </View>
-
-            <View style={styles.chartRow}>
-              <View style={styles.chartLabelRow}>
-                <Text style={styles.chartLabelText}>🛍️ Compras & Presentes</Text>
-                <Text style={styles.chartPctText}>{pctShopping}% ({stats.shoppingMemories})</Text>
-              </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${pctShopping}%`, backgroundColor: COLORS.gold }]} />
-              </View>
-            </View>
-
-            <View style={styles.chartRow}>
-              <View style={styles.chartLabelRow}>
-                <Text style={styles.chartLabelText}>✨ Outros</Text>
-                <Text style={styles.chartPctText}>{pctOther}% ({stats.otherMemories})</Text>
-              </View>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${pctOther}%`, backgroundColor: '#777' }]} />
-              </View>
-            </View>
+            ))}
           </View>
 
-          {/* Counts Grid */}
+          {/* Totais */}
           <Text style={styles.sectionHeading}>Totais Cadastrados</Text>
           <View style={styles.grid}>
-            {[
-              { icon: '📸', label: 'Memórias', count: stats.memories, tint: COLORS.accentSoft },
-              { icon: '🍽️', label: 'Restaurantes', count: stats.restaurants, tint: '#faece4' },
-              { icon: '🏖️', label: 'Lugares', count: stats.places, tint: '#e7f1e8' },
-              { icon: '🎬', label: 'Filmes & Séries', count: stats.movies, tint: '#eee9fb' },
-              { icon: '📖', label: 'Diários', count: stats.diary, tint: '#e6f4ea' },
-              { icon: '🎁', label: 'Wishlist', count: stats.wishes, tint: COLORS.goldSoft },
-              { icon: '💌', label: 'Recados', count: stats.messages, tint: '#e3f2fd' },
-              { icon: '✈️', label: 'Viagens', count: stats.trips, tint: '#f5f5f5' },
-            ].map((s, idx) => (
-              <View key={idx} style={styles.card}>
-                <View style={[styles.iconBox, { backgroundColor: s.tint }]}>
-                  <Text style={{ fontSize: 22 }}>{s.icon}</Text>
+            {totals.map(item => (
+              <View key={item.label} style={styles.card}>
+                <View style={[styles.iconBox, { backgroundColor: item.tint }]}>
+                  <Text style={styles.cardIcon}>{item.icon}</Text>
                 </View>
-                <Text style={styles.cardCount}>{s.count}</Text>
-                <Text style={styles.cardLabel}>{s.label}</Text>
+                <Text style={styles.cardCount}>{item.count}</Text>
+                <Text style={styles.cardLabel}>{item.label}</Text>
               </View>
             ))}
           </View>
@@ -252,6 +297,7 @@ export default function StatsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
+  flex1: { flex: 1 },
   header: {
     backgroundColor: COLORS.headerBg,
     paddingTop: 54, paddingHorizontal: 16, paddingBottom: 13,
@@ -260,6 +306,7 @@ const styles = StyleSheet.create({
   backBtn: { paddingVertical: 4 },
   backText: { color: COLORS.headerAccent, fontSize: 14, fontWeight: '500' },
   headerTitle: { fontSize: 18, fontStyle: 'italic', fontWeight: '500', color: COLORS.headerText },
+  headerSpacer: { width: 50 },
 
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { fontSize: 13, color: COLORS.muted, marginTop: 12 },
@@ -305,6 +352,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   card: { width: '48%', backgroundColor: COLORS.surface, borderWidth: 0.5, borderColor: COLORS.border, borderRadius: RADIUS.sm, padding: 16, alignItems: 'center', gap: 8 },
   iconBox: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  cardIcon: { fontSize: 22 },
   cardCount: { fontSize: 24, fontWeight: 'bold', color: COLORS.text },
   cardLabel: { fontSize: 12, color: COLORS.muted, fontWeight: '500' },
 });

@@ -4,10 +4,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 
-console.log('Supabase initialization config:', {
-  url: supabaseUrl ? supabaseUrl : 'MISSING',
-  key: supabaseAnonKey ? 'PRESENT' : 'MISSING',
-});
+/** True quando as env vars do Supabase estão preenchidas com valores reais (não placeholders). */
+export const isSupabaseConfigured: boolean =
+  supabaseUrl.length > 0 &&
+  supabaseAnonKey.length > 0 &&
+  !supabaseUrl.includes('your-project-id') &&
+  !supabaseAnonKey.includes('your-anon-key');
 
 // Safe storage wrapper to prevent SSR (Server-Side Rendering) reference errors on Node.js
 const safeStorage = {

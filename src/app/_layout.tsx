@@ -1,22 +1,38 @@
+import { useEffect } from 'react';
 import { Tabs } from 'expo-router';
-import { Platform, StyleSheet, View, Text, ActivityIndicator } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { COLORS } from '@/constants/theme';
 import { AuthProvider, useAuth } from '@/hooks/use-auth';
+import { ToastProvider } from '@/components/ui/toast';
+import { ConfirmProvider } from '@/components/ui/confirm';
+import { registerForPush } from '@/lib/push';
 import LoginScreen from '@/components/login-screen';
-import { supabase } from '@/lib/supabase';
-import { useEffect } from 'react';
+
+const TAB_ICONS: Record<string, string> = {
+  home: '🏠',
+  feed: '📸',
+  plan: '📅',
+  notes: '💌',
+  more: '•••',
+};
+
+// Telas acessadas pela aba "Mais" — fazem parte do grupo de tabs mas ficam fora da barra.
+const HIDDEN_SCREENS = [
+  'diary',
+  'wishlist',
+  'activities',
+  'gallery',
+  'map',
+  'timeline',
+  'notifications',
+  'polls',
+  'stats',
+];
 
 function TabIcon({ icon, label, focused }: { icon: string; label: string; focused: boolean }) {
-  const iconMap: Record<string, string> = {
-    home: '🏠',
-    feed: '📸',
-    plan: '📅',
-    notes: '💌',
-    more: '•••',
-  };
   return (
     <View style={styles.tabItem}>
-      <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>{iconMap[icon] || '•'}</Text>
+      <Text style={[styles.tabIcon, focused && styles.tabIconActive]}>{TAB_ICONS[icon] || '•'}</Text>
       <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>{label}</Text>
       {focused && <View style={styles.tabDot} />}
     </View>
@@ -26,32 +42,9 @@ function TabIcon({ icon, label, focused }: { icon: string; label: string; focuse
 function AppContent() {
   const { user, loading } = useAuth();
 
+  // Registra o dispositivo para push quando o usuário entra (nativo apenas).
   useEffect(() => {
-    async function syncDatabaseUserNames() {
-      try {
-        const isUrlConfigured = process.env.EXPO_PUBLIC_SUPABASE_URL && !process.env.EXPO_PUBLIC_SUPABASE_URL.includes('your-project-id');
-        const isKeyConfigured = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY && !process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY.includes('your-anon-key-here');
-        if (isUrlConfigured && isKeyConfigured) {
-          // Check user 1 (should be Luysa, was Ana)
-          const { data: user1 } = await supabase.from('users').select('display_name').eq('id', 1).single();
-          if (user1 && user1.display_name === 'Ana') {
-            await supabase.from('users').update({ display_name: 'Luysa' }).eq('id', 1);
-            console.log('Renamed database user 1 from Ana to Luysa');
-          }
-          // Check user 2 (should be Leonardo, was Rafael)
-          const { data: user2 } = await supabase.from('users').select('display_name').eq('id', 2).single();
-          if (user2 && user2.display_name === 'Rafael') {
-            await supabase.from('users').update({ display_name: 'Leonardo' }).eq('id', 2);
-            console.log('Renamed database user 2 from Rafael to Leonardo');
-          }
-        }
-      } catch (e) {
-        console.error('Failed to sync database user names:', e);
-      }
-    }
-    if (user) {
-      syncDatabaseUserNames();
-    }
+    if (user) void registerForPush(user.id);
   }, [user]);
 
   if (loading) {
@@ -109,60 +102,9 @@ function AppContent() {
           tabBarIcon: ({ focused }) => <TabIcon icon="more" label="mais" focused={focused} />,
         }}
       />
-      <Tabs.Screen
-        name="diary"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="wishlist"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="activities"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="gallery"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="map"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="timeline"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="notifications"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="polls"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="stats"
-        options={{
-          href: null,
-        }}
-      />
+      {HIDDEN_SCREENS.map(name => (
+        <Tabs.Screen key={name} name={name} options={{ href: null }} />
+      ))}
     </Tabs>
   );
 }
@@ -170,7 +112,11 @@ function AppContent() {
 export default function TabLayout() {
   return (
     <AuthProvider>
-      <AppContent />
+      <ToastProvider>
+        <ConfirmProvider>
+          <AppContent />
+        </ConfirmProvider>
+      </ToastProvider>
     </AuthProvider>
   );
 }
@@ -221,4 +167,3 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 });
-

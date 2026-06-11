@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { sendPushToUser } from './push';
 
 export async function sendNotification(
   fromUserId: number,
@@ -26,6 +27,9 @@ export async function sendNotification(
     if (error) {
       console.warn('Failed to insert notification in database:', error.message);
     }
+
+    // Também envia push para o celular do destinatário (no-op se não houver token).
+    await sendPushToUser(recipientId, title, description || title);
   } catch (err) {
     console.error('Failed to trigger sendNotification:', err);
   }

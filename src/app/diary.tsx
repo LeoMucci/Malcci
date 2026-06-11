@@ -1,24 +1,27 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { router } from 'expo-router';
 import { COLORS, RADIUS } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { supabase } from '@/lib/supabase';
-import { router } from 'expo-router';
+import { useRealtimeRefresh } from '@/hooks/use-realtime';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { getErrorMessage } from '@/lib/errors';
+import { cleanText, isNonEmpty, LIMITS } from '@/lib/validation';
+import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm';
+import type { DiaryEntryRow } from '@/types/domain';
 
-interface DiaryEntry {
-  id: number;
-  content: string;
-  mood: 'happy' | 'sad' | 'excited' | 'calm' | 'romantic' | 'tired' | 'grateful';
-  created_at: string;
-  author_id: number;
-  author?: {
-    display_name: string;
-    username: string;
-  };
+type MoodKey = 'happy' | 'romantic' | 'calm' | 'excited' | 'tired' | 'grateful' | 'sad';
+type MoodFilter = 'all' | MoodKey;
+
+interface MoodInfo {
+  emoji: string;
+  label: string;
+  color: string;
 }
 
-const MOODS_MAP = {
+const MOODS_MAP: Record<MoodKey, MoodInfo> = {
   happy: { emoji: '😊', label: 'Feliz', color: '#ffb3ba' },
   romantic: { emoji: '🥰', label: 'Romântico', color: '#ffc6ff' },
   calm: { emoji: '😌', label: 'Calmo', color: '#caffbf' },
@@ -28,19 +31,32 @@ const MOODS_MAP = {
   sad: { emoji: '😢', label: 'Triste', color: '#a0c4ff' },
 };
 
+const MOOD_KEYS = Object.keys(MOODS_MAP) as MoodKey[];
+
+function resolveMood(mood: string | null): MoodInfo {
+  return MOODS_MAP[(mood ?? 'happy') as MoodKey] ?? MOODS_MAP.happy;
+}
+
 export default function DiaryScreen() {
   const { user } = useAuth();
-  const [entries, setEntries] = useState<DiaryEntry[]>([]);
+  const { showToast } = useToast();
+  const confirm = useConfirm();
+  const [entries, setEntries] = useState<DiaryEntryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [newContent, setNewContent] = useState('');
-  const [selectedMood, setSelectedMood] = useState<keyof typeof MOODS_MAP>('happy');
+  const [selectedMood, setSelectedMood] = useState<MoodKey>('happy');
   const [submitting, setSubmitting] = useState(false);
   const [searchText, setSearchText] = useState('');
-  const [selectedFilterMood, setSelectedFilterMood] = useState<string>('all');
+  const [selectedFilterMood, setSelectedFilterMood] = useState<MoodFilter>('all');
 
-  const loadEntries = async () => {
-    setLoading(true);
+  const loadEntries = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setEntries([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const { data, error } = await supabase
         .from('diary_entries')
@@ -51,71 +67,85 @@ export default function DiaryScreen() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setEntries(data || []);
+      setEntries((data ?? []) as DiaryEntryRow[]);
     } catch (e) {
-      console.error('Failed to load diary entries:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar o diário.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
     loadEntries();
+  }, [loadEntries]);
+
+  useRealtimeRefresh(['diary_entries'], loadEntries);
+
+  const filteredEntries = useMemo(() => {
+    const search = searchText.trim().toLowerCase();
+    return entries.filter(entry => {
+      const matchMood = selectedFilterMood === 'all' || entry.mood === selectedFilterMood;
+      const matchText = !search || entry.content.toLowerCase().includes(search);
+      return matchMood && matchText;
+    });
+  }, [entries, selectedFilterMood, searchText]);
+
+  const closeCompose = useCallback(() => {
+    setIsAdding(false);
+    setNewContent('');
+    setSelectedMood('happy');
   }, []);
 
-  const handleAddEntry = async () => {
-    if (!newContent.trim() || !user) return;
-    setSubmitting(true);
+  const handleAddEntry = useCallback(async () => {
+    if (!user) return;
 
+    const content = cleanText(newContent, LIMITS.diaryEntry);
+    if (!isNonEmpty(content)) {
+      showToast('Escreva algo antes de registrar no diário.', 'error');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      showToast('Configure o Supabase no arquivo .env para salvar no diário.', 'info');
+      return;
+    }
+
+    setSubmitting(true);
     try {
       const { error } = await supabase
         .from('diary_entries')
-        .insert({
-          content: newContent,
-          mood: selectedMood,
-          author_id: user.id,
-        });
+        .insert({ content, mood: selectedMood, author_id: user.id });
 
       if (error) throw error;
 
-      setNewContent('');
-      setSelectedMood('happy');
-      setIsAdding(false);
+      closeCompose();
+      showToast('Registro salvo no diário. 📖', 'success');
       loadEntries();
     } catch (e) {
-      console.error('Failed to save diary entry:', e);
-      Alert.alert('Erro', 'Não foi possível salvar a entrada do diário.');
+      showToast(getErrorMessage(e, 'Não foi possível salvar a entrada do diário.'), 'error');
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [user, newContent, selectedMood, closeCompose, loadEntries, showToast]);
 
-  const handleDeleteEntry = async (id: number) => {
-    Alert.alert(
-      'Deletar Entrada',
-      'Tem certeza que deseja apagar este dia do diário?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Deletar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await supabase
-                .from('diary_entries')
-                .delete()
-                .eq('id', id);
-
-              if (error) throw error;
-              loadEntries();
-            } catch (e) {
-              console.error('Failed to delete entry:', e);
-            }
-          },
-        },
-      ]
-    );
-  };
+  const handleDeleteEntry = useCallback((id: number) => {
+    void (async () => {
+      const ok = await confirm({
+        title: 'Apagar entrada',
+        message: 'Tem certeza que deseja apagar este dia do diário?',
+        confirmLabel: 'Apagar',
+        destructive: true,
+      });
+      if (!ok) return;
+      try {
+        const { error } = await supabase.from('diary_entries').delete().eq('id', id);
+        if (error) throw error;
+        showToast('Registro apagado.', 'success');
+        loadEntries();
+      } catch (e) {
+        showToast(getErrorMessage(e, 'Não foi possível apagar o registro.'), 'error');
+      }
+    })();
+  }, [confirm, loadEntries, showToast]);
 
   return (
     <View style={styles.container}>
@@ -132,7 +162,7 @@ export default function DiaryScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Mood Filters */}
+      {/* Filtros por humor */}
       <View style={styles.filtersContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersScroll}>
           <TouchableOpacity
@@ -142,8 +172,8 @@ export default function DiaryScreen() {
           >
             <Text style={[styles.filterText, selectedFilterMood === 'all' && styles.filterTextActive]}>Todos</Text>
           </TouchableOpacity>
-          {Object.keys(MOODS_MAP).map(key => {
-            const mood = MOODS_MAP[key as keyof typeof MOODS_MAP];
+          {MOOD_KEYS.map(key => {
+            const mood = MOODS_MAP[key];
             const isActive = selectedFilterMood === key;
             return (
               <TouchableOpacity
@@ -161,7 +191,7 @@ export default function DiaryScreen() {
         </ScrollView>
       </View>
 
-      {/* Search Input */}
+      {/* Busca */}
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
@@ -179,54 +209,44 @@ export default function DiaryScreen() {
         </View>
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {entries
-            .filter(e => {
-              const matchMood = selectedFilterMood === 'all' ? true : e.mood === selectedFilterMood;
-              const matchText = !searchText.trim() || e.content.toLowerCase().includes(searchText.toLowerCase());
-              return matchMood && matchText;
-            })
-            .map(entry => {
-              const mood = MOODS_MAP[entry.mood] || MOODS_MAP.happy;
-              const dateStr = new Date(entry.created_at).toLocaleDateString('pt-BR', {
-                day: '2-digit',
-                month: 'long',
-                year: 'numeric',
-              });
-              const isOwner = entry.author_id === user?.id;
+          {filteredEntries.map(entry => {
+            const mood = resolveMood(entry.mood);
+            const dateStr = new Date(entry.created_at).toLocaleDateString('pt-BR', {
+              day: '2-digit',
+              month: 'long',
+              year: 'numeric',
+            });
+            const isOwner = entry.author_id === user?.id;
 
-              return (
-                <View key={entry.id} style={styles.card}>
-                  <View style={styles.cardHeader}>
-                    <View style={[styles.moodBadge, { backgroundColor: mood.color + '40' }]}>
-                      <Text style={{ fontSize: 16 }}>{mood.emoji}</Text>
-                      <Text style={[styles.moodLabel, { color: COLORS.accentDeep }]}>{mood.label}</Text>
-                    </View>
-                    <Text style={styles.authorName}>
-                      por {entry.author?.display_name || 'Parceiro'}
-                    </Text>
-                    {isOwner && (
-                      <TouchableOpacity style={styles.delBtn} onPress={() => handleDeleteEntry(entry.id)}>
-                        <Text style={{ fontSize: 14 }}>🗑️</Text>
-                      </TouchableOpacity>
-                    )}
+            return (
+              <View key={entry.id} style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <View style={[styles.moodBadge, { backgroundColor: mood.color + '40' }]}>
+                    <Text style={{ fontSize: 16 }}>{mood.emoji}</Text>
+                    <Text style={[styles.moodLabel, { color: COLORS.accentDeep }]}>{mood.label}</Text>
                   </View>
-                  <Text style={styles.cardContent}>{entry.content}</Text>
-                  <Text style={styles.cardDate}>{dateStr}</Text>
+                  <Text style={styles.authorName}>
+                    por {entry.author?.display_name || 'Parceiro'}
+                  </Text>
+                  {isOwner && (
+                    <TouchableOpacity style={styles.delBtn} onPress={() => handleDeleteEntry(entry.id)}>
+                      <Text style={{ fontSize: 14 }}>🗑️</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
-              );
-            })}
+                <Text style={styles.cardContent}>{entry.content}</Text>
+                <Text style={styles.cardDate}>{dateStr}</Text>
+              </View>
+            );
+          })}
 
-          {entries.filter(e => {
-            const matchMood = selectedFilterMood === 'all' ? true : e.mood === selectedFilterMood;
-            const matchText = !searchText.trim() || e.content.toLowerCase().includes(searchText.toLowerCase());
-            return matchMood && matchText;
-          }).length === 0 && (
+          {filteredEntries.length === 0 && (
             <Text style={styles.empty}>Nenhum registro encontrado nesta pesquisa. 📖</Text>
           )}
         </ScrollView>
       )}
 
-      {/* Add Entry Modal Overlay */}
+      {/* Modal de nova entrada */}
       {isAdding && (
         <View style={styles.overlay}>
           <View style={styles.modal}>
@@ -234,8 +254,8 @@ export default function DiaryScreen() {
 
             <Text style={styles.label}>Como você se sente hoje?</Text>
             <View style={styles.moodGrid}>
-              {Object.keys(MOODS_MAP).map(key => {
-                const item = MOODS_MAP[key as keyof typeof MOODS_MAP];
+              {MOOD_KEYS.map(key => {
+                const item = MOODS_MAP[key];
                 const isSelected = selectedMood === key;
                 return (
                   <TouchableOpacity
@@ -245,7 +265,7 @@ export default function DiaryScreen() {
                       { backgroundColor: item.color + '25' },
                       isSelected && { borderColor: COLORS.accent, borderWidth: 1.5 },
                     ]}
-                    onPress={() => setSelectedMood(key as any)}
+                    onPress={() => setSelectedMood(key)}
                     activeOpacity={0.7}
                   >
                     <Text style={{ fontSize: 22 }}>{item.emoji}</Text>
@@ -262,27 +282,20 @@ export default function DiaryScreen() {
               placeholderTextColor="#a69098"
               multiline
               numberOfLines={6}
+              maxLength={LIMITS.diaryEntry}
               value={newContent}
               onChangeText={setNewContent}
             />
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.cancelBtn]}
-                onPress={() => {
-                  setIsAdding(false);
-                  setNewContent('');
-                  setSelectedMood('happy');
-                }}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity style={[styles.modalBtn, styles.cancelBtn]} onPress={closeCompose} activeOpacity={0.7}>
                 <Text style={styles.cancelBtnText}>Cancelar</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.modalBtn, styles.saveBtn, (!newContent.trim() || submitting) && styles.saveDisabled]}
+                style={[styles.modalBtn, styles.saveBtn, (!isNonEmpty(newContent) || submitting) && styles.saveDisabled]}
                 onPress={handleAddEntry}
-                disabled={!newContent.trim() || submitting}
+                disabled={!isNonEmpty(newContent) || submitting}
                 activeOpacity={0.7}
               >
                 <Text style={styles.saveBtnText}>Registrar</Text>
@@ -344,7 +357,7 @@ const styles = StyleSheet.create({
   saveDisabled: { backgroundColor: COLORS.accentSoft, opacity: 0.7 },
   saveBtnText: { fontSize: 13.5, fontWeight: '500', color: '#ffffff' },
 
-  /* Search & Filter Styles */
+  /* Busca e filtros */
   filtersContainer: { backgroundColor: COLORS.surface, borderBottomWidth: 0.5, borderBottomColor: COLORS.border },
   filtersScroll: { paddingHorizontal: 16, paddingVertical: 10, gap: 10 },
   filterChip: { paddingVertical: 6, paddingHorizontal: 14, borderRadius: 20, borderWidth: 0.5, borderColor: COLORS.border, backgroundColor: COLORS.bg },

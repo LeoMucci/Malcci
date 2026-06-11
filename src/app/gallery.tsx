@@ -1,17 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Dimensions, Modal } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Dimensions, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { COLORS, RADIUS } from '@/constants/theme';
-import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
+import { COLORS, RADIUS } from '@/constants/theme';
+import { useToast } from '@/components/ui/toast';
+import { useRealtimeRefresh } from '@/hooks/use-realtime';
+import { getErrorMessage } from '@/lib/errors';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import type { MemoryRow } from '@/types/domain';
 
-interface PhotoMemory {
-  id: number;
-  title: string;
-  photo_url: string;
-  type: string;
-  created_at: string;
-}
+type GalleryPhotoRow = Pick<MemoryRow, 'id' | 'title' | 'photo_url' | 'type' | 'created_at'>;
+type GalleryPhoto = GalleryPhotoRow & { photo_url: string };
 
 const FILTERS = [
   { key: 'all', label: 'Todas' },
@@ -19,19 +18,25 @@ const FILTERS = [
   { key: 'place', label: 'Lugares 🏖️' },
   { key: 'special', label: 'Especiais ⭐' },
   { key: 'other', label: 'Outros ✨' },
-];
+] as const;
 
+const GRID_COLUMNS = 3;
 const screenWidth = Dimensions.get('window').width;
-const imageSize = (screenWidth - 40) / 3; // 3 items per row, padding 16, gap 4
+const imageSize = (screenWidth - 40) / GRID_COLUMNS; // 3 itens por linha, padding 16, gap 4
 
 export default function GalleryScreen() {
-  const [photos, setPhotos] = useState<PhotoMemory[]>([]);
+  const { showToast } = useToast();
+  const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeFilter, setActiveFilter] = useState('all');
-  const [previewPhoto, setPreviewPhoto] = useState<PhotoMemory | null>(null);
+  const [activeFilter, setActiveFilter] = useState<string>('all');
+  const [previewPhoto, setPreviewPhoto] = useState<GalleryPhoto | null>(null);
 
-  const loadPhotos = async () => {
-    setLoading(true);
+  const loadPhotos = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setPhotos([]);
+      setLoading(false);
+      return;
+    }
     try {
       const { data, error } = await supabase
         .from('memories')
@@ -41,23 +46,27 @@ export default function GalleryScreen() {
 
       if (error) throw error;
 
-      // Filter out empty urls if any
-      const validPhotos = (data || []).filter(p => p.photo_url && p.photo_url.trim() !== '');
-      setPhotos(validPhotos);
+      const rows = (data as GalleryPhotoRow[] | null) ?? [];
+      setPhotos(rows.filter((p): p is GalleryPhoto => typeof p.photo_url === 'string' && p.photo_url.trim() !== ''));
     } catch (e) {
-      console.error('Failed to load gallery:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar as fotos.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
-    loadPhotos();
-  }, []);
+    void loadPhotos();
+  }, [loadPhotos]);
 
-  const filteredPhotos = activeFilter === 'all' 
-    ? photos 
-    : photos.filter(p => p.type === activeFilter);
+  useRealtimeRefresh(['memories'], loadPhotos);
+
+  const filteredPhotos = useMemo(
+    () => (activeFilter === 'all' ? photos : photos.filter(p => p.type === activeFilter)),
+    [photos, activeFilter],
+  );
+
+  const handleClosePreview = useCallback(() => setPreviewPhoto(null), []);
 
   return (
     <View style={styles.container}>
@@ -69,7 +78,7 @@ export default function GalleryScreen() {
           <Text style={styles.backText}>‹ Voltar</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Mural de Fotos</Text>
-        <View style={{ width: 50 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
       {/* Filter Row */}
@@ -119,18 +128,19 @@ export default function GalleryScreen() {
 
       {/* Fullscreen Photo Modal Preview */}
       {previewPhoto && (
-        <Modal transparent visible={!!previewPhoto} animationType="fade" onRequestClose={() => setPreviewPhoto(null)}>
+        <Modal transparent visible animationType="fade" onRequestClose={handleClosePreview}>
           <View style={styles.previewOverlay}>
-            <TouchableOpacity style={styles.closeOverlay} onPress={() => setPreviewPhoto(null)} activeOpacity={1}>
+            <TouchableOpacity style={styles.closeOverlay} onPress={handleClosePreview} activeOpacity={1}>
               <View style={styles.previewCard}>
                 <Image source={{ uri: previewPhoto.photo_url }} style={styles.previewImage} resizeMode="contain" />
                 <View style={styles.previewInfo}>
                   <Text style={styles.previewTitle}>{previewPhoto.title}</Text>
                   <Text style={styles.previewDate}>
-                    Lembrança de {new Date(previewPhoto.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
+                    Lembrança de{' '}
+                    {new Date(previewPhoto.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
                   </Text>
                 </View>
-                <TouchableOpacity style={styles.closeBtn} onPress={() => setPreviewPhoto(null)}>
+                <TouchableOpacity style={styles.closeBtn} onPress={handleClosePreview}>
                   <Text style={styles.closeBtnText}>Fechar</Text>
                 </TouchableOpacity>
               </View>
@@ -152,6 +162,7 @@ const styles = StyleSheet.create({
   backBtn: { paddingVertical: 4 },
   backText: { color: COLORS.headerAccent, fontSize: 14, fontWeight: '500' },
   headerTitle: { fontSize: 18, fontStyle: 'italic', fontWeight: '500', color: COLORS.headerText },
+  headerSpacer: { width: 50 },
 
   filtersContainer: { backgroundColor: COLORS.surface, borderBottomWidth: 0.5, borderBottomColor: COLORS.border },
   filtersScroll: { paddingHorizontal: 16, paddingVertical: 10, gap: 10 },

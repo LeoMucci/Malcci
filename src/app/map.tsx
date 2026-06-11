@@ -1,109 +1,101 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, Alert, Linking, Platform } from 'react-native';
-import { StatusBar } from 'expo-status-bar';
-import { COLORS, RADIUS, MTYPE } from '@/constants/theme';
-import { supabase } from '@/lib/supabase';
-import { router } from 'expo-router';
+// Tela do mapa: mapa interativo (Leaflet) com todos os pontos e uma linha
+// do tempo ligando-os em ordem cronológica.
 
-interface MemoryLocation {
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { router } from 'expo-router';
+import { COLORS } from '@/constants/theme';
+import { useToast } from '@/components/ui/toast';
+import { useRealtimeRefresh } from '@/hooks/use-realtime';
+import { getErrorMessage } from '@/lib/errors';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { InteractiveMap } from '@/features/map/interactive-map';
+import type { MapPoint } from '@/features/map/leaflet-html';
+import type { MemoryRow } from '@/types/domain';
+
+type MemoryLocationRow = Pick<
+  MemoryRow,
+  'id' | 'title' | 'location' | 'latitude' | 'longitude' | 'type' | 'photo_url' | 'description' | 'created_at'
+>;
+
+interface MappedPoint extends MapPoint {
   id: number;
-  title: string;
-  location: string;
-  latitude?: number;
-  longitude?: number;
-  type: string;
-  rating?: number;
-  photo_url?: string;
-  description?: string;
-  created_at: string;
 }
 
 const CATEGORIES = [
-  { key: 'all', label: 'Todos', color: COLORS.accent },
-  { key: 'restaurant', label: 'Restaurantes 🍽️', color: COLORS.restaurant },
-  { key: 'place', label: 'Lugares 🏖️', color: COLORS.place },
-  { key: 'special', label: 'Especiais ⭐', color: COLORS.special },
-];
+  { key: 'all', label: 'Todos' },
+  { key: 'special', label: 'Especiais 💖' },
+  { key: 'place', label: 'Lugares 🏖️' },
+  { key: 'restaurant', label: 'Restaurantes 🍽️' },
+] as const;
 
 export default function MapScreen() {
-  const [locations, setLocations] = useState<MemoryLocation[]>([]);
+  const { showToast } = useToast();
+  const [points, setPoints] = useState<MappedPoint[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeFilter, setActiveFilter] = useState('all');
+  const [activeFilter, setActiveFilter] = useState<string>('all');
 
-  const loadLocations = async () => {
-    setLoading(true);
+  const loadPoints = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setPoints([]);
+      setLoading(false);
+      return;
+    }
     try {
       const { data, error } = await supabase
         .from('memories')
-        .select('id, title, location, latitude, longitude, type, rating, photo_url, description, created_at')
-        .not('location', 'is', null)
+        .select('id, title, location, latitude, longitude, type, photo_url, description, created_at')
+        .not('latitude', 'is', null)
+        .not('longitude', 'is', null)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setLocations((data || []).filter(item => item.location.trim() !== ''));
+
+      const rows = (data as MemoryLocationRow[] | null) ?? [];
+      const mapped = rows
+        .filter(r => typeof r.latitude === 'number' && typeof r.longitude === 'number')
+        .map<MappedPoint>(r => ({
+          id: r.id,
+          title: r.title,
+          type: r.type,
+          lat: r.latitude as number,
+          lng: r.longitude as number,
+          date: r.created_at,
+          description: r.description ?? '',
+          photo: r.photo_url,
+        }));
+      setPoints(mapped);
     } catch (e) {
-      console.error('Failed to load locations:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar o mapa.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
-    loadLocations();
-  }, []);
+    void loadPoints();
+  }, [loadPoints]);
 
-  const handleOpenMap = (item: MemoryLocation) => {
-    let url = '';
-    const label = encodeURIComponent(item.title);
+  useRealtimeRefresh(['memories'], loadPoints);
 
-    if (item.latitude && item.longitude) {
-      // GPS Coordinates available
-      if (Platform.OS === 'ios') {
-        url = `maps://maps.apple.com/?q=${label}&ll=${item.latitude},${item.longitude}`;
-      } else {
-        url = `geo:${item.latitude},${item.longitude}?q=${item.latitude},${item.longitude}(${label})`;
-      }
-    } else {
-      // Fallback search by address text
-      const address = encodeURIComponent(item.location);
-      if (Platform.OS === 'ios') {
-        url = `maps://maps.apple.com/?q=${address}`;
-      } else {
-        url = `geo:0,0?q=${address}`;
-      }
-    }
-
-    // Web fallback if geo URI scheme fails
-    Linking.canOpenURL(url).then(supported => {
-      if (supported) {
-        Linking.openURL(url);
-      } else {
-        const webUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location)}`;
-        Linking.openURL(webUrl);
-      }
-    }).catch(err => {
-      console.error('Error opening map URL:', err);
-    });
-  };
-
-  const filteredList = activeFilter === 'all' 
-    ? locations 
-    : locations.filter(loc => loc.type === activeFilter);
+  const filteredPoints = useMemo(
+    () => (activeFilter === 'all' ? points : points.filter(p => p.type === activeFilter)),
+    [points, activeFilter],
+  );
 
   return (
     <View style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
           <Text style={styles.backText}>‹ Voltar</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Nossos Destinos</Text>
-        <View style={{ width: 50 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
-      {/* Categories chips */}
       <View style={styles.filtersContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersScroll}>
           {CATEGORIES.map(cat => {
@@ -125,60 +117,23 @@ export default function MapScreen() {
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color={COLORS.accent} />
-          <Text style={styles.loadingText}>Buscando lugares visitados...</Text>
+          <Text style={styles.loadingText}>Montando o mapa...</Text>
+        </View>
+      ) : filteredPoints.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={styles.empty}>
+            Nenhum ponto com localização nesta categoria.{'\n'}Adicione o local ao registrar uma memória no feed 🗺️
+          </Text>
         </View>
       ) : (
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {filteredList.map(item => {
-            const meta = MTYPE[item.type] || MTYPE.other;
-            const hasCoords = !!(item.latitude && item.longitude);
-            return (
-              <View key={item.id} style={styles.card}>
-                {item.photo_url ? (
-                  <Image source={{ uri: item.photo_url }} style={styles.cardImage} />
-                ) : (
-                  <View style={[styles.cardPlaceholder, { backgroundColor: meta.tint }]}>
-                    <Text style={{ fontSize: 36 }}>📍</Text>
-                  </View>
-                )}
-
-                <View style={styles.cardBody}>
-                  <View style={styles.cardMeta}>
-                    <Text style={[styles.cardType, { color: meta.color }]}>{meta.label.toUpperCase()}</Text>
-                    <Text style={styles.cardDate}>
-                      {new Date(item.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
-                    </Text>
-                  </View>
-
-                  <Text style={styles.cardTitle}>{item.title}</Text>
-                  <Text style={styles.cardLoc}>📍 {item.location}</Text>
-
-                  {item.description ? (
-                    <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text>
-                  ) : null}
-
-                  {item.rating ? (
-                    <View style={styles.starsRow}>
-                      {Array.from({ length: item.rating }).map((_, i) => (
-                        <Text key={i} style={{ fontSize: 13, color: '#ffd479' }}>★</Text>
-                      ))}
-                    </View>
-                  ) : null}
-
-                  <TouchableOpacity style={styles.mapBtn} onPress={() => handleOpenMap(item)}>
-                    <Text style={styles.mapBtnText}>
-                      {hasCoords ? 'Traçar Rota no GPS 🗺️' : 'Ver Endereço no Mapa 🗺️'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            );
-          })}
-
-          {filteredList.length === 0 && (
-            <Text style={styles.empty}>Nenhum lugar cadastrado com localização nesta categoria. Adicione no feed! 🗺️</Text>
-          )}
-        </ScrollView>
+        <View style={styles.mapWrap}>
+          <InteractiveMap points={filteredPoints} />
+          <View style={styles.legend} pointerEvents="none">
+            <Text style={styles.legendText}>
+              {filteredPoints.length} {filteredPoints.length === 1 ? 'lugar' : 'lugares'} · a linha mostra a ordem do tempo 💕
+            </Text>
+          </View>
+        </View>
       )}
     </View>
   );
@@ -194,6 +149,7 @@ const styles = StyleSheet.create({
   backBtn: { paddingVertical: 4 },
   backText: { color: COLORS.headerAccent, fontSize: 14, fontWeight: '500' },
   headerTitle: { fontSize: 18, fontStyle: 'italic', fontWeight: '500', color: COLORS.headerText },
+  headerSpacer: { width: 50 },
 
   filtersContainer: { backgroundColor: COLORS.surface, borderBottomWidth: 0.5, borderBottomColor: COLORS.border },
   filtersScroll: { paddingHorizontal: 16, paddingVertical: 10, gap: 10 },
@@ -204,22 +160,13 @@ const styles = StyleSheet.create({
 
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   loadingText: { fontSize: 13, color: COLORS.muted, marginTop: 12 },
-  empty: { textAlign: 'center', color: COLORS.muted, paddingVertical: 80, fontSize: 13, paddingHorizontal: 40 },
+  empty: { textAlign: 'center', color: COLORS.muted, fontSize: 13.5, lineHeight: 20, paddingHorizontal: 30 },
 
-  scroll: { flex: 1 },
-  scrollContent: { padding: 16, gap: 16, paddingBottom: 30 },
-
-  card: { backgroundColor: COLORS.surface, borderWidth: 0.5, borderColor: COLORS.border, borderRadius: RADIUS.sm, overflow: 'hidden' },
-  cardImage: { width: '100%', height: 160, resizeMode: 'cover' },
-  cardPlaceholder: { width: '100%', height: 100, alignItems: 'center', justifyContent: 'center' },
-  cardBody: { padding: 16, gap: 8 },
-  cardMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardType: { fontSize: 9.5, fontWeight: '700', letterSpacing: 1 },
-  cardDate: { fontSize: 11, color: COLORS.muted },
-  cardTitle: { fontSize: 17, fontWeight: 'bold', color: COLORS.text },
-  cardLoc: { fontSize: 12, color: COLORS.muted },
-  cardDesc: { fontSize: 13, color: '#665', lineHeight: 18 },
-  starsRow: { flexDirection: 'row', gap: 2 },
-  mapBtn: { marginTop: 6, width: '100%', backgroundColor: COLORS.accent, paddingVertical: 11, borderRadius: RADIUS.sm, alignItems: 'center' },
-  mapBtnText: { color: '#fff', fontSize: 12.5, fontWeight: 'bold' },
+  mapWrap: { flex: 1, position: 'relative' },
+  legend: {
+    position: 'absolute', bottom: 14, alignSelf: 'center',
+    backgroundColor: 'rgba(42,26,34,0.85)', borderRadius: 18,
+    paddingVertical: 7, paddingHorizontal: 14,
+  },
+  legendText: { color: '#f0e0e8', fontSize: 11.5, fontWeight: '500' },
 });

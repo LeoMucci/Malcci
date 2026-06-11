@@ -1,40 +1,57 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Alert } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { router } from 'expo-router';
 import { COLORS, RADIUS } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { supabase } from '@/lib/supabase';
+import { useRealtimeRefresh } from '@/hooks/use-realtime';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import { sendNotification } from '@/lib/notifications';
-import { router } from 'expo-router';
+import { getErrorMessage } from '@/lib/errors';
+import { cleanText, isNonEmpty, LIMITS } from '@/lib/validation';
+import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm';
+import { PollCard, type PollOptionVM, type PollVM } from '@/features/polls/poll-card';
+import type { PollRow } from '@/types/domain';
 
-interface Option {
-  id: number;
-  text: string;
-  votes: string[]; // usernames that voted, e.g. ['eu', 'ela']
-}
-
-interface Poll {
-  id: string;
-  question: string;
-  options: Option[];
-  created_at: string;
-  created_by: number;
+function mapPollRows(rows: PollRow[]): PollVM[] {
+  return rows.map(p => ({
+    id: p.id,
+    question: p.question,
+    createdBy: p.created_by,
+    createdAt: p.created_at,
+    options: (p.options ?? []).map(opt => ({
+      id: opt.id,
+      text: opt.option,
+      votes: (p.votes ?? [])
+        .filter(vote => vote.option_id === opt.id)
+        .map(vote => vote.user?.username)
+        .filter((username): username is string => typeof username === 'string'),
+    })),
+  }));
 }
 
 export default function PollsScreen() {
   const { user } = useAuth();
-  const [polls, setPolls] = useState<Poll[]>([]);
+  const { showToast } = useToast();
+  const confirm = useConfirm();
+  const [polls, setPolls] = useState<PollVM[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
 
-  // Form states
+  // Formulário de nova enquete
   const [question, setQuestion] = useState('');
   const [opt1, setOpt1] = useState('');
   const [opt2, setOpt2] = useState('');
   const [opt3, setOpt3] = useState('');
 
-  const loadPolls = async () => {
-    setLoading(true);
+  const loadPolls = useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setPolls([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const { data, error } = await supabase
         .from('polls')
@@ -49,169 +66,140 @@ export default function PollsScreen() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-
-      if (data) {
-        const mappedPolls = data.map(p => {
-          return {
-            id: String(p.id),
-            question: p.question,
-            options: (p.options || []).map((opt: any) => {
-              // Get all usernames that voted for this option
-              const optionVotes = (p.votes || [])
-                .filter((v: any) => v.option_id === opt.id)
-                .map((v: any) => v.user?.username); // 'eu' or 'ela'
-              return {
-                id: opt.id,
-                text: opt.option,
-                votes: optionVotes,
-              };
-            }),
-            created_at: p.created_at,
-            created_by: p.created_by,
-          };
-        });
-        setPolls(mappedPolls);
-      }
+      // Supabase infere a relação users como array; em runtime o join to-one retorna objeto.
+      setPolls(mapPollRows((data ?? []) as unknown as PollRow[]));
     } catch (e) {
-      console.error('Failed to load polls:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar as enquetes.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
 
   useEffect(() => {
     loadPolls();
-  }, [user]);
+  }, [loadPolls]);
 
-  const handleCreatePoll = async () => {
-    if (!question.trim() || !opt1.trim() || !opt2.trim() || !user) {
-      Alert.alert('Erro', 'Insira a pergunta e pelo menos duas opções.');
+  useRealtimeRefresh(['polls', 'poll_options', 'poll_votes'], loadPolls);
+
+  const closeCompose = useCallback(() => {
+    setIsAdding(false);
+    setQuestion('');
+    setOpt1('');
+    setOpt2('');
+    setOpt3('');
+  }, []);
+
+  const handleCreatePoll = useCallback(async () => {
+    if (!user) return;
+
+    const cleanQuestion = cleanText(question, LIMITS.pollQuestion);
+    const cleanOpt1 = cleanText(opt1, LIMITS.pollOption);
+    const cleanOpt2 = cleanText(opt2, LIMITS.pollOption);
+    const cleanOpt3 = cleanText(opt3, LIMITS.pollOption);
+
+    if (!isNonEmpty(cleanQuestion) || !isNonEmpty(cleanOpt1) || !isNonEmpty(cleanOpt2)) {
+      showToast('Insira a pergunta e pelo menos duas opções.', 'error');
+      return;
+    }
+    if (!isSupabaseConfigured) {
+      showToast('Configure o Supabase no arquivo .env para criar enquetes.', 'info');
       return;
     }
 
     try {
-      // 1. Insert poll
-      const { data: pollData, error: pollErr } = await supabase
+      // 1. Cria a enquete
+      const { data, error: pollErr } = await supabase
         .from('polls')
-        .insert({
-          question: question.trim(),
-          created_by: user.id,
-        })
+        .insert({ question: cleanQuestion, created_by: user.id })
         .select()
         .single();
 
       if (pollErr) throw pollErr;
+      const createdPoll = data as PollRow;
 
-      // 2. Insert options
+      // 2. Cria as opções
       const optionsToInsert = [
-        { poll_id: pollData.id, option: opt1.trim() },
-        { poll_id: pollData.id, option: opt2.trim() },
+        { poll_id: createdPoll.id, option: cleanOpt1 },
+        { poll_id: createdPoll.id, option: cleanOpt2 },
+        ...(isNonEmpty(cleanOpt3) ? [{ poll_id: createdPoll.id, option: cleanOpt3 }] : []),
       ];
-      if (opt3.trim()) {
-        optionsToInsert.push({ poll_id: pollData.id, option: opt3.trim() });
-      }
 
-      const { error: optsErr } = await supabase
-        .from('poll_options')
-        .insert(optionsToInsert);
-
+      const { error: optsErr } = await supabase.from('poll_options').insert(optionsToInsert);
       if (optsErr) throw optsErr;
 
-      // Trigger notification
       await sendNotification(
         user.id,
         'suggestion',
         `${user.displayName} criou uma nova enquete! 📊`,
-        `Decisão: "${question.trim()}"`
+        `Decisão: "${cleanQuestion}"`,
       );
 
-      // Reset
-      setQuestion('');
-      setOpt1('');
-      setOpt2('');
-      setOpt3('');
-      setIsAdding(false);
+      closeCompose();
+      showToast('Enquete criada! 📊', 'success');
       loadPolls();
     } catch (e) {
-      console.error('Failed to create poll:', e);
-      Alert.alert('Erro', 'Não foi possível criar a enquete.');
+      showToast(getErrorMessage(e, 'Não foi possível criar a enquete.'), 'error');
     }
-  };
+  }, [user, question, opt1, opt2, opt3, closeCompose, loadPolls, showToast]);
 
-  const handleVote = async (pollId: string, optionIndex: number) => {
+  const handleVote = useCallback(async (poll: PollVM, option: PollOptionVM) => {
     if (!user) return;
-    const poll = polls.find(p => p.id === pollId);
-    if (!poll) return;
 
-    const selectedOption = poll.options[optionIndex];
-    const numericPollId = parseInt(pollId);
-    
-    // Check if user has already voted for this specific option
-    const votedThis = selectedOption.votes.includes(user.username);
+    const votedThis = option.votes.includes(user.username);
 
     try {
-      // 1. Delete any existing vote by this user for this poll
+      // 1. Remove qualquer voto anterior deste usuário nesta enquete
       const { error: delErr } = await supabase
         .from('poll_votes')
         .delete()
-        .eq('poll_id', numericPollId)
+        .eq('poll_id', poll.id)
         .eq('user_id', user.id);
 
       if (delErr) throw delErr;
 
-      // 2. If not toggling off, insert the new vote
+      // 2. Se não for desmarcação, registra o novo voto
       if (!votedThis) {
         const { error: insErr } = await supabase
           .from('poll_votes')
-          .insert({
-            poll_id: numericPollId,
-            option_id: selectedOption.id,
-            user_id: user.id,
-          });
+          .insert({ poll_id: poll.id, option_id: option.id, user_id: user.id });
 
         if (insErr) throw insErr;
 
-        // Trigger notification
         await sendNotification(
           user.id,
           'suggestion',
           `${user.displayName} votou em uma enquete! 📊`,
-          `Escolheu "${selectedOption.text}" em "${poll.question}"`
+          `Escolheu "${option.text}" em "${poll.question}"`,
         );
       }
 
       loadPolls();
     } catch (e) {
-      console.error('Failed to vote:', e);
+      showToast(getErrorMessage(e, 'Não foi possível registrar o voto.'), 'error');
     }
-  };
+  }, [user, loadPolls, showToast]);
 
-  const handleDeletePoll = async (id: string) => {
-    Alert.alert(
-      'Deletar Enquete',
-      'Deseja apagar esta enquete?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Apagar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const { error } = await supabase
-                .from('polls')
-                .delete()
-                .eq('id', parseInt(id));
+  const handleDeletePoll = useCallback((pollId: number) => {
+    void (async () => {
+      const ok = await confirm({
+        title: 'Apagar enquete',
+        message: 'Deseja apagar esta enquete?',
+        confirmLabel: 'Apagar',
+        destructive: true,
+      });
+      if (!ok) return;
+      try {
+        const { error } = await supabase.from('polls').delete().eq('id', pollId);
+        if (error) throw error;
+        showToast('Enquete apagada.', 'success');
+        loadPolls();
+      } catch (e) {
+        showToast(getErrorMessage(e, 'Não foi possível apagar a enquete.'), 'error');
+      }
+    })();
+  }, [confirm, loadPolls, showToast]);
 
-              if (error) throw error;
-              loadPolls();
-            } catch (e) {
-              console.error('Failed to delete poll:', e);
-            }
-          },
-        },
-      ]
-    );
-  };
+  const canSubmit = isNonEmpty(question) && isNonEmpty(opt1) && isNonEmpty(opt2);
 
   return (
     <View style={styles.container}>
@@ -235,56 +223,15 @@ export default function PollsScreen() {
         </View>
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {polls.map(poll => {
-            const totalVotes = poll.options.reduce((acc, curr) => acc + curr.votes.length, 0);
-
-            return (
-              <View key={poll.id} style={styles.card}>
-                <View style={styles.cardHeader}>
-                  <Text style={styles.questionText}>{poll.question}</Text>
-                  <TouchableOpacity style={styles.delBtn} onPress={() => handleDeletePoll(poll.id)}>
-                    <Text style={{ fontSize: 13, color: '#bbb' }}>🗑️</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.optionsBox}>
-                  {poll.options.map((opt, idx) => {
-                    const votesCount = opt.votes.length;
-                    const pct = totalVotes > 0 ? Math.round((votesCount / totalVotes) * 100) : 0;
-                    const votedThis = user ? opt.votes.includes(user.username) : false;
-
-                    return (
-                      <TouchableOpacity
-                        key={opt.id}
-                        style={[styles.optionRow, votedThis && styles.optionRowVoted]}
-                        onPress={() => handleVote(poll.id, idx)}
-                        activeOpacity={0.7}
-                      >
-                        <View style={styles.optionTextRow}>
-                          <Text style={[styles.optionText, votedThis && { fontWeight: '600', color: COLORS.accentDeep }]}>
-                            {opt.text}
-                          </Text>
-                          <Text style={styles.optionPct}>{pct}% ({votesCount})</Text>
-                        </View>
-                        {/* Progress Bar background */}
-                        <View style={styles.progressBar}>
-                          <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: votedThis ? COLORS.accent : COLORS.muted + '40' }]} />
-                        </View>
-                        {/* Who voted avatar */}
-                        <View style={styles.votersRow}>
-                          {opt.votes.map((v, vidx) => (
-                            <View key={vidx} style={[styles.miniAv, v === 'ela' ? styles.avEla : styles.avEu]}>
-                              <Text style={styles.miniAvText}>{v === 'ela' ? 'L' : 'L'}</Text>
-                            </View>
-                          ))}
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </View>
-            );
-          })}
+          {polls.map(poll => (
+            <PollCard
+              key={poll.id}
+              poll={poll}
+              currentUsername={user?.username}
+              onVote={handleVote}
+              onDelete={handleDeletePoll}
+            />
+          ))}
 
           {polls.length === 0 && (
             <Text style={styles.empty}>Nenhuma decisão aberta. Crie uma enquete clicando no "+" no topo! 📊</Text>
@@ -292,7 +239,7 @@ export default function PollsScreen() {
         </ScrollView>
       )}
 
-      {/* Add Poll Modal Overlay */}
+      {/* Modal de nova enquete */}
       {isAdding && (
         <View style={styles.overlay}>
           <View style={styles.modal}>
@@ -302,6 +249,7 @@ export default function PollsScreen() {
             <TextInput
               style={styles.modalInput}
               placeholder="Ex: Qual pizza pedir hoje?"
+              maxLength={LIMITS.pollQuestion}
               value={question}
               onChangeText={setQuestion}
             />
@@ -310,6 +258,7 @@ export default function PollsScreen() {
             <TextInput
               style={styles.modalInput}
               placeholder="Ex: Pepperoni"
+              maxLength={LIMITS.pollOption}
               value={opt1}
               onChangeText={setOpt1}
             />
@@ -318,6 +267,7 @@ export default function PollsScreen() {
             <TextInput
               style={styles.modalInput}
               placeholder="Ex: Quatro Queijos"
+              maxLength={LIMITS.pollOption}
               value={opt2}
               onChangeText={setOpt2}
             />
@@ -326,29 +276,20 @@ export default function PollsScreen() {
             <TextInput
               style={styles.modalInput}
               placeholder="Ex: Calabresa"
+              maxLength={LIMITS.pollOption}
               value={opt3}
               onChangeText={setOpt3}
             />
 
             <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, styles.cancelBtn]}
-                onPress={() => {
-                  setIsAdding(false);
-                  setQuestion('');
-                  setOpt1('');
-                  setOpt2('');
-                  setOpt3('');
-                }}
-                activeOpacity={0.7}
-              >
+              <TouchableOpacity style={[styles.modalBtn, styles.cancelBtn]} onPress={closeCompose} activeOpacity={0.7}>
                 <Text style={styles.cancelBtnText}>Cancelar</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.modalBtn, styles.saveBtn, (!question.trim() || !opt1.trim() || !opt2.trim()) && styles.saveDisabled]}
+                style={[styles.modalBtn, styles.saveBtn, !canSubmit && styles.saveDisabled]}
                 onPress={handleCreatePoll}
-                disabled={!question.trim() || !opt1.trim() || !opt2.trim()}
+                disabled={!canSubmit}
                 activeOpacity={0.7}
               >
                 <Text style={styles.saveBtnText}>Criar</Text>
@@ -381,28 +322,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { padding: 16, gap: 14, paddingBottom: 30 },
 
-  card: { backgroundColor: COLORS.surface, borderWidth: 0.5, borderColor: COLORS.border, borderRadius: RADIUS.sm, padding: 16 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
-  questionText: { fontSize: 15.5, fontWeight: 'bold', color: COLORS.text, flex: 1, lineHeight: 22 },
-  delBtn: { padding: 4, marginLeft: 10 },
-
-  optionsBox: { gap: 12 },
-  optionRow: { padding: 12, borderRadius: RADIUS.sm, borderWidth: 0.5, borderColor: COLORS.border, backgroundColor: COLORS.bg, position: 'relative', overflow: 'hidden' },
-  optionRowVoted: { borderColor: COLORS.accentSoft, backgroundColor: COLORS.accentSoft + '20' },
-  optionTextRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', zIndex: 5 },
-  optionText: { fontSize: 13.5, color: COLORS.text, fontWeight: '500' },
-  optionPct: { fontSize: 11, color: COLORS.muted, fontWeight: '600' },
-  
-  progressBar: { height: 4, backgroundColor: '#efe5e7', borderRadius: 2, marginTop: 8, overflow: 'hidden', zIndex: 5 },
-  progressFill: { height: '100%', borderRadius: 2 },
-
-  votersRow: { flexDirection: 'row', gap: 4, marginTop: 6, zIndex: 5, justifyContent: 'flex-end' },
-  miniAv: { width: 16, height: 16, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  avEla: { backgroundColor: '#e6b3c5' },
-  avEu: { backgroundColor: '#b3c7dd' },
-  miniAvText: { fontSize: 8, fontWeight: 'bold' },
-
-  /* Modal styles */
+  /* Modal */
   overlay: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(20, 10, 15, 0.45)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20, zIndex: 99 },
   modal: { width: '100%', maxWidth: 360, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 16, elevation: 8 },
   modalTitle: { fontSize: 19, fontStyle: 'italic', color: COLORS.text, fontWeight: '500', marginBottom: 16, textAlign: 'center' },

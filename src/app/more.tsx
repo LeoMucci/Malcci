@@ -1,38 +1,63 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { useCallback } from 'react';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { router, type Href } from 'expo-router';
 import { COLORS, RADIUS } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
-import { router } from 'expo-router';
 
-const ITEMS = [
-  { k: 'map', icon: '🗺️', color: COLORS.accent, t: 'Mapa', s: 'Lugares visitados' },
-  { k: 'gallery', icon: '📷', color: COLORS.gold, t: 'Galeria', s: 'Todas as fotos' },
-  { k: 'diary', icon: '📖', color: COLORS.sage, t: 'Diário', s: 'Entradas do dia' },
-  { k: 'movies', icon: '📺', color: COLORS.violet, t: 'Filmes', s: 'Assistir / assistidos' },
-  { k: 'wishlist', icon: '🎁', color: COLORS.gold, t: 'Wishlist', s: 'Coisas legais' },
-  { k: 'dates', icon: '💕', color: COLORS.accent, t: 'Datas', s: 'Lembretes especiais' },
-  { k: 'activities', icon: '🎲', color: COLORS.blue, t: 'Sorteador', s: 'O que fazer?' },
-  { k: 'polls', icon: '📊', color: COLORS.violet, t: 'Enquetes', s: 'Decidir juntos' },
-  { k: 'notifications', icon: '🔔', color: COLORS.accent, t: 'Avisos', s: 'Notificações' },
-  { k: 'stats', icon: '📈', color: COLORS.blue, t: 'Estatísticas', s: 'Resumo geral' },
-  { k: 'timeline', icon: '📜', color: COLORS.sage, t: 'Timeline', s: 'Nossa história' },
+interface MenuItem {
+  key: string;
+  icon: string;
+  title: string;
+  subtitle: string;
+  route: Href;
+}
+
+interface MenuSection {
+  title: string;
+  items: ReadonlyArray<MenuItem>;
+}
+
+const MENU_SECTIONS: ReadonlyArray<MenuSection> = [
+  {
+    title: 'Memórias',
+    items: [
+      { key: 'gallery', icon: '📷', title: 'Galeria', subtitle: 'Todas as fotos', route: '/gallery' },
+      { key: 'map', icon: '🗺️', title: 'Mapa', subtitle: 'Lugares visitados', route: '/map' },
+      { key: 'timeline', icon: '📜', title: 'Timeline', subtitle: 'Nossa história', route: '/timeline' },
+    ],
+  },
+  {
+    title: 'Juntos',
+    items: [
+      { key: 'diary', icon: '📖', title: 'Diário', subtitle: 'Entradas do dia', route: '/diary' },
+      { key: 'polls', icon: '📊', title: 'Enquetes', subtitle: 'Decidir juntos', route: '/polls' },
+      { key: 'activities', icon: '🎲', title: 'Sorteador', subtitle: 'O que fazer?', route: '/activities' },
+      { key: 'wishlist', icon: '🎁', title: 'Wishlist', subtitle: 'Coisas legais', route: '/wishlist' },
+    ],
+  },
+  {
+    title: 'Planejamento',
+    items: [
+      { key: 'movies', icon: '📺', title: 'Filmes & Séries', subtitle: 'Assistir / assistidos', route: '/plan?tab=movies' },
+      { key: 'dates', icon: '💕', title: 'Datas especiais', subtitle: 'Lembretes especiais', route: '/plan?tab=calendar' },
+    ],
+  },
+  {
+    title: 'Geral',
+    items: [
+      { key: 'stats', icon: '📈', title: 'Estatísticas', subtitle: 'Resumo geral', route: '/stats' },
+      { key: 'notifications', icon: '🔔', title: 'Avisos', subtitle: 'Notificações', route: '/notifications' },
+    ],
+  },
 ];
 
 export default function MoreScreen() {
   const { user, logout } = useAuth();
 
-  const handlePress = (key: string) => {
-    if (key === 'movies' || key === 'dates') {
-      router.push('/plan');
-    } else if (key === 'notifications') {
-      router.push('/notifications');
-    } else if (['map', 'gallery', 'diary', 'wishlist', 'activities', 'timeline'].includes(key)) {
-      router.push(`/${key}` as any);
-    } else {
-      // stats, polls
-      router.push(`/${key}` as any);
-    }
-  };
+  const handleNavigate = useCallback((route: Href) => {
+    router.push(route);
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -52,22 +77,27 @@ export default function MoreScreen() {
         )}
       </View>
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.grid}>
-          {ITEMS.map(it => (
-            <TouchableOpacity 
-              key={it.k} 
-              style={styles.card} 
-              activeOpacity={0.7}
-              onPress={() => handlePress(it.k)}
-            >
-              <Text style={{ fontSize: 25 }}>{it.icon}</Text>
-              <View>
-                <Text style={styles.cardTitle}>{it.t}</Text>
-                <Text style={styles.cardSub}>{it.s}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {MENU_SECTIONS.map(section => (
+          <View key={section.title} style={styles.section}>
+            <Text style={styles.sectionLabel}>{section.title}</Text>
+            <View style={styles.grid}>
+              {section.items.map(item => (
+                <TouchableOpacity
+                  key={item.key}
+                  style={styles.card}
+                  activeOpacity={0.7}
+                  onPress={() => handleNavigate(item.route)}
+                >
+                  <Text style={styles.cardIcon}>{item.icon}</Text>
+                  <View>
+                    <Text style={styles.cardTitle}>{item.title}</Text>
+                    <Text style={styles.cardSub}>{item.subtitle}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        ))}
       </ScrollView>
     </View>
   );
@@ -124,7 +154,14 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   scroll: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 30 },
+  scrollContent: { padding: 16, paddingBottom: 30, gap: 20 },
+  section: { gap: 10 },
+  sectionLabel: {
+    fontSize: 11,
+    letterSpacing: 1.6,
+    textTransform: 'uppercase',
+    color: '#b59aa1',
+  },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 11 },
   card: {
     width: '48%',
@@ -134,6 +171,7 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 8,
   },
+  cardIcon: { fontSize: 25 },
   cardTitle: { fontSize: 14, color: COLORS.text, fontWeight: '500' },
   cardSub: { fontSize: 11, color: COLORS.muted },
 });

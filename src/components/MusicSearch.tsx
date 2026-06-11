@@ -1,122 +1,125 @@
-import React, { useState, useRef, useCallback } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ActivityIndicator, FlatList } from 'react-native';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Image,
+  ActivityIndicator,
+} from 'react-native';
 import { COLORS, RADIUS } from '@/constants/theme';
+import { getErrorMessage } from '@/lib/errors';
+import { formatTrackDuration, searchTracks, type MusicTrack } from '@/lib/music';
 
-interface DeezerTrack {
-  id: number;
-  title: string;
-  artist: { name: string };
-  album: { title: string; cover_small: string; cover_medium: string };
-  preview: string;
-  duration: number;
+/** Detalhes extras da faixa escolhida (prévia + capa) — opcional para retrocompat. */
+export interface SelectedTrackMeta {
+  previewUrl: string;
+  albumArt: string;
 }
 
 interface MusicSearchProps {
   trackName: string;
   artistName: string;
-  onSelect: (track: string, artist: string) => void;
+  onSelect: (track: string, artist: string, meta?: SelectedTrackMeta) => void;
   onClear?: () => void;
 }
 
+const SEARCH_DEBOUNCE_MS = 400;
+const MIN_QUERY_LENGTH = 2;
+const RESULT_LIMIT = 8;
+
 export default function MusicSearch({ trackName, artistName, onSelect, onClear }: MusicSearchProps) {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<DeezerTrack[]>([]);
+  const [results, setResults] = useState<MusicTrack[]>([]);
   const [loading, setLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
 
   const isSelected = !!(trackName && artistName);
 
-  const searchMusic = useCallback(async (text: string) => {
-    if (text.trim().length < 2) {
-      setResults([]);
-      setShowResults(false);
-      return;
+  const cancelPendingSearch = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-
-    setLoading(true);
-    try {
-      // Using a CORS proxy for web + direct for native
-      const encodedQuery = encodeURIComponent(text.trim());
-      const url = `https://api.deezer.com/search?q=${encodedQuery}&limit=8&output=jsonp&callback=`;
-      
-      // For web, we need to use JSONP or a proxy — let's use corsproxy.io
-      const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(`https://api.deezer.com/search?q=${encodedQuery}&limit=8`)}`;
-
-      const response = await fetch(proxyUrl);
-      const data = await response.json();
-
-      if (data && data.data) {
-        setResults(data.data);
-        setShowResults(true);
-      } else {
-        setResults([]);
-      }
-    } catch (e) {
-      console.error('Music search error:', e);
-      // Fallback: try iTunes API which has CORS support
-      try {
-        const encodedQuery = encodeURIComponent(text.trim());
-        const itunesUrl = `https://itunes.apple.com/search?term=${encodedQuery}&media=music&limit=8`;
-        const response = await fetch(itunesUrl);
-        const data = await response.json();
-        
-        if (data && data.results) {
-          const mapped: DeezerTrack[] = data.results.map((item: any) => ({
-            id: item.trackId,
-            title: item.trackName,
-            artist: { name: item.artistName },
-            album: { 
-              title: item.collectionName, 
-              cover_small: item.artworkUrl60,
-              cover_medium: item.artworkUrl100 
-            },
-            preview: item.previewUrl,
-            duration: Math.floor(item.trackTimeMillis / 1000),
-          }));
-          setResults(mapped);
-          setShowResults(true);
-        }
-      } catch (e2) {
-        console.error('iTunes fallback error:', e2);
-        setResults([]);
-      }
-    } finally {
-      setLoading(false);
-    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    requestIdRef.current += 1;
   }, []);
+
+  // Cancela debounce e requisições em voo ao desmontar.
+  useEffect(() => cancelPendingSearch, [cancelPendingSearch]);
+
+  const searchMusic = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+
+      if (trimmed.length < MIN_QUERY_LENGTH) {
+        cancelPendingSearch();
+        setResults([]);
+        setShowResults(false);
+        setSearchError(false);
+        setLoading(false);
+        return;
+      }
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const requestId = ++requestIdRef.current;
+
+      setLoading(true);
+      setSearchError(false);
+
+      try {
+        const tracks = await searchTracks(trimmed, controller.signal, RESULT_LIMIT);
+        if (requestId !== requestIdRef.current) return; // resposta obsoleta — ignora
+        setResults(tracks);
+        setShowResults(true);
+      } catch (error) {
+        if (requestId !== requestIdRef.current) return; // busca cancelada/substituída
+        console.warn('Music search error:', getErrorMessage(error, 'falha de rede'));
+        setResults([]);
+        setShowResults(true);
+        setSearchError(true);
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [cancelPendingSearch]
+  );
 
   const handleChangeText = (text: string) => {
     setQuery(text);
-
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-
-    timerRef.current = setTimeout(() => {
-      searchMusic(text);
-    }, 400);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => searchMusic(text), SEARCH_DEBOUNCE_MS);
   };
 
-  const handleSelect = (item: DeezerTrack) => {
-    onSelect(item.title, item.artist.name);
+  const handleSelect = (item: MusicTrack) => {
+    cancelPendingSearch();
+    onSelect(item.title, item.artist, { previewUrl: item.previewUrl, albumArt: item.albumArt });
     setQuery('');
     setResults([]);
     setShowResults(false);
+    setSearchError(false);
+    setLoading(false);
   };
 
   const handleClear = () => {
+    cancelPendingSearch();
     onSelect('', '');
     setQuery('');
     setResults([]);
     setShowResults(false);
+    setSearchError(false);
+    setLoading(false);
     onClear?.();
-  };
-
-  const formatDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   return (
@@ -149,7 +152,7 @@ export default function MusicSearch({ trackName, artistName, onSelect, onClear }
             {loading && <ActivityIndicator size="small" color={COLORS.accent} style={{ marginLeft: 6 }} />}
           </View>
 
-          {showResults && results.length > 0 && (
+          {showResults && !searchError && results.length > 0 && (
             <View style={styles.resultsList}>
               {results.map((item) => (
                 <TouchableOpacity
@@ -158,8 +161,8 @@ export default function MusicSearch({ trackName, artistName, onSelect, onClear }
                   onPress={() => handleSelect(item)}
                   activeOpacity={0.7}
                 >
-                  {item.album.cover_small ? (
-                    <Image source={{ uri: item.album.cover_small }} style={styles.albumArt} />
+                  {item.albumArt ? (
+                    <Image source={{ uri: item.albumArt }} style={styles.albumArt} />
                   ) : (
                     <View style={[styles.albumArt, styles.albumPlaceholder]}>
                       <Text style={{ fontSize: 14 }}>🎵</Text>
@@ -167,17 +170,23 @@ export default function MusicSearch({ trackName, artistName, onSelect, onClear }
                   )}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.resultTrack} numberOfLines={1}>{item.title}</Text>
-                    <Text style={styles.resultArtist} numberOfLines={1}>{item.artist.name}</Text>
+                    <Text style={styles.resultArtist} numberOfLines={1}>{item.artist}</Text>
                   </View>
                   {item.duration > 0 && (
-                    <Text style={styles.resultDuration}>{formatDuration(item.duration)}</Text>
+                    <Text style={styles.resultDuration}>{formatTrackDuration(item.duration)}</Text>
                   )}
                 </TouchableOpacity>
               ))}
             </View>
           )}
 
-          {showResults && results.length === 0 && !loading && query.length >= 2 && (
+          {showResults && searchError && !loading && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>Não foi possível buscar músicas — tente de novo.</Text>
+            </View>
+          )}
+
+          {showResults && !searchError && results.length === 0 && !loading && query.trim().length >= MIN_QUERY_LENGTH && (
             <View style={styles.noResultsBox}>
               <Text style={styles.noResultsText}>Nenhuma música encontrada para "{query}"</Text>
             </View>
@@ -285,6 +294,21 @@ const styles = StyleSheet.create({
   clearText: {
     fontSize: 11,
     color: COLORS.muted,
+  },
+
+  errorBox: {
+    backgroundColor: '#fdf1f1',
+    borderWidth: 1,
+    borderColor: '#e8c5c5',
+    borderTopWidth: 0,
+    borderBottomLeftRadius: RADIUS.sm,
+    borderBottomRightRadius: RADIUS.sm,
+    padding: 16,
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#9E3D5A',
+    textAlign: 'center',
   },
 
   noResultsBox: {

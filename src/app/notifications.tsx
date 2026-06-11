@@ -1,21 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { COLORS, RADIUS } from '@/constants/theme';
-import { useAuth } from '@/hooks/use-auth';
-import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
+import { COLORS, RADIUS } from '@/constants/theme';
+import { useToast } from '@/components/ui/toast';
+import { useAuth } from '@/hooks/use-auth';
+import { useRealtimeRefresh } from '@/hooks/use-realtime';
+import { getErrorMessage } from '@/lib/errors';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase';
+import { NOTIFS } from '@/constants/data';
+import type { NotificationRow } from '@/types/domain';
 
-interface AppNotification {
-  id: number;
-  type: 'new_memory' | 'new_comment' | 'new_message' | 'birthday' | 'anniversary' | 'special_date' | 'suggestion';
-  title: string;
-  description: string;
-  read: boolean;
-  created_at: string;
+interface NotificationMeta {
+  icon: string;
+  label: string;
+  color: string;
+  bg: string;
 }
 
-const TYPE_MAP = {
+const TYPE_META: Record<string, NotificationMeta> = {
   new_memory: { icon: '📸', label: 'Nova Memória', color: COLORS.accent, bg: COLORS.accentSoft },
   new_comment: { icon: '💬', label: 'Comentário', color: COLORS.sage, bg: '#e6f4ea' },
   new_message: { icon: '💌', label: 'Recado', color: COLORS.blue, bg: '#e3f2fd' },
@@ -25,7 +28,11 @@ const TYPE_MAP = {
   suggestion: { icon: '💡', label: 'Sugestão', color: COLORS.gold, bg: COLORS.goldSoft },
 };
 
-function formatRelativeTime(dateStr: string) {
+function getTypeMeta(type: string): NotificationMeta {
+  return TYPE_META[type] ?? TYPE_META.suggestion;
+}
+
+function formatRelativeTime(dateStr: string): string {
   const dateObj = new Date(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - dateObj.getTime();
@@ -40,14 +47,37 @@ function formatRelativeTime(dateStr: string) {
   return dateObj.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
 }
 
+// Fallback local (modo demonstração) mapeado para o formato do banco.
+const MOCK_TYPE_BY_ICON: Record<string, string> = {
+  cake: 'birthday',
+  movie: 'suggestion',
+  restaurant: 'suggestion',
+};
+
+const MOCK_NOTIFICATIONS: NotificationRow[] = NOTIFS.map((item, index) => ({
+  id: -(index + 1),
+  user_id: 0,
+  type: MOCK_TYPE_BY_ICON[item.icon] ?? 'suggestion',
+  title: item.title,
+  description: item.text,
+  related_id: null,
+  read: false,
+  created_at: new Date().toISOString(),
+}));
+
 export default function NotificationsScreen() {
   const { user } = useAuth();
-  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const { showToast } = useToast();
+  const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadNotifications = async () => {
+  const loadNotifications = useCallback(async () => {
     if (!user) return;
-    setLoading(true);
+    if (!isSupabaseConfigured) {
+      setNotifications(MOCK_NOTIFICATIONS);
+      setLoading(false);
+      return;
+    }
     try {
       const { data, error } = await supabase
         .from('notifications')
@@ -56,46 +86,52 @@ export default function NotificationsScreen() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setNotifications(data || []);
+      setNotifications((data as NotificationRow[] | null) ?? []);
     } catch (e) {
-      console.error('Failed to load notifications:', e);
+      showToast(getErrorMessage(e, 'Não foi possível carregar os avisos.'), 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, showToast]);
 
   useEffect(() => {
-    loadNotifications();
-  }, [user]);
+    void loadNotifications();
+  }, [loadNotifications]);
 
-  const markAsRead = async (id: number) => {
-    try {
-      const { error } = await supabase
-        .from('notifications')
-        .update({ read: true })
-        .eq('id', id);
+  useRealtimeRefresh(['notifications'], loadNotifications);
 
-      if (error) throw error;
-      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-    } catch (e) {
-      console.error('Failed to mark notification as read:', e);
-    }
-  };
+  const markAsRead = useCallback(
+    async (id: number) => {
+      if (!isSupabaseConfigured) {
+        setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+        return;
+      }
+      try {
+        const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id);
+        if (error) throw error;
+        setNotifications(prev => prev.map(n => (n.id === id ? { ...n, read: true } : n)));
+      } catch (e) {
+        showToast(getErrorMessage(e, 'Não foi possível marcar o aviso como lido.'), 'error');
+      }
+    },
+    [showToast],
+  );
 
-  const clearAll = async () => {
+  const handleClearAll = useCallback(async () => {
     if (!user || notifications.length === 0) return;
+    if (!isSupabaseConfigured) {
+      setNotifications([]);
+      return;
+    }
     try {
-      const { error } = await supabase
-        .from('notifications')
-        .delete()
-        .eq('user_id', user.id);
-
+      const { error } = await supabase.from('notifications').delete().eq('user_id', user.id);
       if (error) throw error;
       setNotifications([]);
+      showToast('Avisos limpos.', 'success');
     } catch (e) {
-      console.error('Failed to clear notifications:', e);
+      showToast(getErrorMessage(e, 'Não foi possível limpar os avisos.'), 'error');
     }
-  };
+  }, [user, notifications.length, showToast]);
 
   return (
     <View style={styles.container}>
@@ -108,11 +144,11 @@ export default function NotificationsScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Avisos & Notificações</Text>
         {notifications.length > 0 ? (
-          <TouchableOpacity onPress={clearAll} activeOpacity={0.7}>
+          <TouchableOpacity onPress={handleClearAll} activeOpacity={0.7}>
             <Text style={styles.clearText}>Limpar</Text>
           </TouchableOpacity>
         ) : (
-          <View style={{ width: 45 }} />
+          <View style={styles.headerSpacer} />
         )}
       </View>
 
@@ -124,7 +160,7 @@ export default function NotificationsScreen() {
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {notifications.map(n => {
-            const config = TYPE_MAP[n.type] || TYPE_MAP.suggestion;
+            const config = getTypeMeta(n.type);
             return (
               <TouchableOpacity
                 key={n.id}
@@ -133,18 +169,16 @@ export default function NotificationsScreen() {
                 activeOpacity={0.8}
               >
                 <View style={[styles.iconBox, { backgroundColor: config.bg }]}>
-                  <Text style={{ fontSize: 18 }}>{config.icon}</Text>
+                  <Text style={styles.iconText}>{config.icon}</Text>
                 </View>
 
-                <View style={{ flex: 1, gap: 3 }}>
+                <View style={styles.cardContent}>
                   <View style={styles.cardHeader}>
                     <Text style={styles.cardType}>{config.label}</Text>
                     <Text style={styles.cardTime}>{formatRelativeTime(n.created_at)}</Text>
                   </View>
                   <Text style={[styles.cardTitle, !n.read && styles.cardTitleUnread]}>{n.title}</Text>
-                  {n.description ? (
-                    <Text style={styles.cardDesc}>{n.description}</Text>
-                  ) : null}
+                  {n.description ? <Text style={styles.cardDesc}>{n.description}</Text> : null}
                 </View>
 
                 {!n.read && <View style={styles.unreadDot} />}
@@ -154,7 +188,7 @@ export default function NotificationsScreen() {
 
           {notifications.length === 0 && (
             <View style={styles.emptyContainer}>
-              <Text style={{ fontSize: 44, marginBottom: 12 }}>🔔</Text>
+              <Text style={styles.emptyEmoji}>🔔</Text>
               <Text style={styles.emptyTitle}>Tudo calmo por aqui!</Text>
               <Text style={styles.emptyText}>Você não tem nenhum aviso ou lembrete novo no momento.</Text>
             </View>
@@ -175,6 +209,7 @@ const styles = StyleSheet.create({
   backBtn: { paddingVertical: 4 },
   backText: { color: COLORS.headerAccent, fontSize: 14, fontWeight: '500' },
   headerTitle: { fontSize: 18, fontStyle: 'italic', fontWeight: '500', color: COLORS.headerText },
+  headerSpacer: { width: 45 },
   clearText: { color: COLORS.headerAccent, fontSize: 13, fontWeight: '500' },
 
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
@@ -198,72 +233,19 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(200, 90, 124, 0.25)',
     backgroundColor: 'rgba(200, 90, 124, 0.02)',
   },
-  iconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%',
-  },
-  cardType: {
-    fontSize: 9.5,
-    fontWeight: '700',
-    color: COLORS.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  cardTime: {
-    fontSize: 10,
-    color: COLORS.muted,
-  },
-  cardTitle: {
-    fontSize: 14.5,
-    color: COLORS.text,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  cardTitleUnread: {
-    fontWeight: '700',
-  },
-  cardDesc: {
-    fontSize: 12.5,
-    color: '#6c565d',
-    lineHeight: 18,
-    marginTop: 2,
-  },
-  unreadDot: {
-    position: 'absolute',
-    top: 14,
-    right: 14,
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: COLORS.accent,
-  },
+  iconBox: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  iconText: { fontSize: 18 },
+  cardContent: { flex: 1, gap: 3 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' },
+  cardType: { fontSize: 9.5, fontWeight: '700', color: COLORS.muted, textTransform: 'uppercase', letterSpacing: 0.8 },
+  cardTime: { fontSize: 10, color: COLORS.muted },
+  cardTitle: { fontSize: 14.5, color: COLORS.text, fontWeight: '500', marginTop: 2 },
+  cardTitleUnread: { fontWeight: '700' },
+  cardDesc: { fontSize: 12.5, color: '#6c565d', lineHeight: 18, marginTop: 2 },
+  unreadDot: { position: 'absolute', top: 14, right: 14, width: 7, height: 7, borderRadius: 3.5, backgroundColor: COLORS.accent },
 
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 120,
-    paddingHorizontal: 40,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: COLORS.text,
-    fontStyle: 'italic',
-  },
-  emptyText: {
-    fontSize: 12.5,
-    color: COLORS.muted,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginTop: 6,
-  },
+  emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 120, paddingHorizontal: 40 },
+  emptyEmoji: { fontSize: 44, marginBottom: 12 },
+  emptyTitle: { fontSize: 16, fontWeight: 'bold', color: COLORS.text, fontStyle: 'italic' },
+  emptyText: { fontSize: 12.5, color: COLORS.muted, textAlign: 'center', lineHeight: 18, marginTop: 6 },
 });

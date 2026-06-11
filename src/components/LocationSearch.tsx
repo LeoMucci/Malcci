@@ -1,6 +1,7 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { COLORS, RADIUS } from '@/constants/theme';
+import { getErrorMessage } from '@/lib/errors';
 
 interface NominatimPlace {
   place_id: number;
@@ -26,47 +27,109 @@ interface LocationSearchProps {
   placeholder?: string;
 }
 
+const SEARCH_DEBOUNCE_MS = 500; // Nominatim pede rate limiting
+const REQUEST_TIMEOUT_MS = 8000;
+const MIN_QUERY_LENGTH = 3;
+const RESULT_LIMIT = 6;
+
+/** Busca JSON com timeout próprio, encadeado a um sinal externo de cancelamento. */
+async function fetchJsonWithTimeout<T>(
+  url: string,
+  externalSignal: AbortSignal,
+  init?: RequestInit
+): Promise<T> {
+  const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+
+  if (externalSignal.aborted) controller.abort();
+  externalSignal.addEventListener('abort', abortFromExternal);
+
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+    externalSignal.removeEventListener('abort', abortFromExternal);
+  }
+}
+
 export default function LocationSearch({ locationText, onSelect, onClear, placeholder }: LocationSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NominatimPlace[]>([]);
   const [loading, setLoading] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestIdRef = useRef(0);
 
   const isSelected = !!locationText;
 
-  const searchLocation = useCallback(async (text: string) => {
-    if (text.trim().length < 3) {
-      setResults([]);
-      setShowResults(false);
-      return;
+  const cancelPendingSearch = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
     }
-
-    setLoading(true);
-    try {
-      const encodedQuery = encodeURIComponent(text.trim());
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedQuery}&limit=6&addressdetails=1&accept-language=pt-BR`;
-
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'CoupleApp/1.0',
-        },
-      });
-      const data = await response.json();
-
-      if (data && Array.isArray(data)) {
-        setResults(data);
-        setShowResults(true);
-      } else {
-        setResults([]);
-      }
-    } catch (e) {
-      console.error('Location search error:', e);
-      setResults([]);
-    } finally {
-      setLoading(false);
-    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    requestIdRef.current += 1;
   }, []);
+
+  // Cancela debounce e requisições em voo ao desmontar.
+  useEffect(() => cancelPendingSearch, [cancelPendingSearch]);
+
+  const searchLocation = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+
+      if (trimmed.length < MIN_QUERY_LENGTH) {
+        cancelPendingSearch();
+        setResults([]);
+        setShowResults(false);
+        setSearchError(false);
+        setLoading(false);
+        return;
+      }
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const requestId = ++requestIdRef.current;
+
+      setLoading(true);
+      setSearchError(false);
+
+      try {
+        const encodedQuery = encodeURIComponent(trimmed);
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedQuery}&limit=${RESULT_LIMIT}&addressdetails=1&accept-language=pt-BR`;
+
+        const data = await fetchJsonWithTimeout<NominatimPlace[]>(url, controller.signal, {
+          headers: {
+            'User-Agent': 'CoupleApp/1.0',
+          },
+        });
+
+        if (requestId !== requestIdRef.current) return; // resposta obsoleta — ignora
+        setResults(Array.isArray(data) ? data : []);
+        setShowResults(true);
+      } catch (error) {
+        if (requestId !== requestIdRef.current) return; // busca cancelada/substituída
+        console.warn('Location search error:', getErrorMessage(error, 'falha de rede'));
+        setResults([]);
+        setShowResults(true);
+        setSearchError(true);
+      } finally {
+        if (requestId === requestIdRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [cancelPendingSearch]
+  );
 
   const handleChangeText = (text: string) => {
     setQuery(text);
@@ -77,7 +140,7 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
 
     timerRef.current = setTimeout(() => {
       searchLocation(text);
-    }, 500); // Nominatim asks for rate limiting
+    }, SEARCH_DEBOUNCE_MS);
   };
 
   const handleSelect = (item: NominatimPlace) => {
@@ -92,12 +155,13 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
       const city = addr.city || addr.town || addr.village;
       if (city) parts.push(city);
       if (addr.state) parts.push(addr.state);
-      
+
       shortName = parts.length > 0 ? parts.join(', ') : item.display_name.split(',').slice(0, 3).join(',');
     } else {
       shortName = item.display_name.split(',').slice(0, 3).join(',');
     }
 
+    cancelPendingSearch();
     onSelect(
       shortName.trim(),
       parseFloat(item.lat),
@@ -106,13 +170,18 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
     setQuery('');
     setResults([]);
     setShowResults(false);
+    setSearchError(false);
+    setLoading(false);
   };
 
   const handleClear = () => {
+    cancelPendingSearch();
     onSelect('', null, null);
     setQuery('');
     setResults([]);
     setShowResults(false);
+    setSearchError(false);
+    setLoading(false);
     onClear?.();
   };
 
@@ -163,7 +232,7 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
             {loading && <ActivityIndicator size="small" color={COLORS.accent} style={{ marginLeft: 6 }} />}
           </View>
 
-          {showResults && results.length > 0 && (
+          {showResults && !searchError && results.length > 0 && (
             <View style={styles.resultsList}>
               {results.map((item) => (
                 <TouchableOpacity
@@ -183,7 +252,13 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
             </View>
           )}
 
-          {showResults && results.length === 0 && !loading && query.length >= 3 && (
+          {showResults && searchError && !loading && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>Não foi possível buscar locais — tente de novo.</Text>
+            </View>
+          )}
+
+          {showResults && !searchError && results.length === 0 && !loading && query.trim().length >= MIN_QUERY_LENGTH && (
             <View style={styles.noResultsBox}>
               <Text style={styles.noResultsText}>Nenhum local encontrado para "{query}"</Text>
             </View>
@@ -271,6 +346,21 @@ const styles = StyleSheet.create({
   clearText: {
     fontSize: 11,
     color: COLORS.muted,
+  },
+
+  errorBox: {
+    backgroundColor: '#fdf1f1',
+    borderWidth: 1,
+    borderColor: '#e8c5c5',
+    borderTopWidth: 0,
+    borderBottomLeftRadius: RADIUS.sm,
+    borderBottomRightRadius: RADIUS.sm,
+    padding: 16,
+  },
+  errorText: {
+    fontSize: 12,
+    color: '#9E3D5A',
+    textAlign: 'center',
   },
 
   noResultsBox: {

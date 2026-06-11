@@ -1,18 +1,19 @@
 {
   "expo": {
-    "name": "temp-init",
-    "slug": "temp-init",
+    "name": "Nosso Espaço",
+    "slug": "nosso-espaco",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "tempinit",
+    "scheme": "nossoespaco",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/images/icon.png",
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#C85A7C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -28,11 +29,23 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
-          }
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 150,
+          "resizeMode": "contain",
+          "backgroundColor": "#FAE7EF"
+        }
+      ],
+      "expo-audio",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "O app acessa suas fotos para você adicionar imagens às memórias do casal."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#C85A7C"
         }
       ]
     ],
