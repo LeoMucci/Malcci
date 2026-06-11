@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Image, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, Image, Platform, Linking, Alert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { COLORS, RADIUS, MTYPE, REACTION_SET } from '@/constants/theme';
 import { FEED as MOCK_FEED } from '@/constants/data';
 import { useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabase';
 import { sendNotification } from '@/lib/notifications';
+import MusicSearch from '@/components/MusicSearch';
+import LocationSearch from '@/components/LocationSearch';
 
 const FILTERS = [
   { key: 'all', label: 'Todas' },
@@ -47,6 +49,8 @@ export default function FeedScreen() {
   const [formType, setFormType] = useState('restaurant');
   const [formDesc, setFormDesc] = useState('');
   const [formLoc, setFormLoc] = useState('');
+  const [formLat, setFormLat] = useState<number | null>(null);
+  const [formLng, setFormLng] = useState<number | null>(null);
   const [formRating, setFormRating] = useState(5);
   const [formSpotifyTrack, setFormSpotifyTrack] = useState('');
   const [formSpotifyArtist, setFormSpotifyArtist] = useState('');
@@ -318,6 +322,8 @@ export default function FeedScreen() {
     setFormType(m.cat);
     setFormDesc(m.desc);
     setFormLoc(m.loc || '');
+    setFormLat(null);
+    setFormLng(null);
     setFormRating(m.stars);
     setFormSpotifyTrack(m.spotify?.track || '');
     setFormSpotifyArtist(m.spotify?.artist || '');
@@ -424,6 +430,8 @@ export default function FeedScreen() {
             title: formTitle,
             description: formDesc || null,
             location: formLoc || null,
+            latitude: formLat,
+            longitude: formLng,
             rating: (formType === 'restaurant' || formType === 'movie') ? formRating : null,
             photo_url: finalUrl,
             photo_key: finalKey,
@@ -452,6 +460,8 @@ export default function FeedScreen() {
             title: formTitle,
             description: formDesc || null,
             location: formLoc || null,
+            latitude: formLat,
+            longitude: formLng,
             rating: (formType === 'restaurant' || formType === 'movie') ? formRating : null,
             photo_url: finalUrl,
             photo_key: finalKey,
@@ -555,12 +565,26 @@ export default function FeedScreen() {
     setFormType('restaurant');
     setFormDesc('');
     setFormLoc('');
+    setFormLat(null);
+    setFormLng(null);
     setFormRating(5);
     setFormSpotifyTrack('');
     setFormSpotifyArtist('');
     setFormPhotoUrl('');
     setPickedFile(null);
     setEditingMemoryId(null);
+  };
+
+  const openSpotifySearch = (track: string, artist: string) => {
+    const query = encodeURIComponent(`${track} ${artist}`);
+    // Try Spotify first, fallback to YouTube Music
+    const spotifyUrl = `https://open.spotify.com/search/${query}`;
+    Linking.openURL(spotifyUrl).catch(() => {
+      const ytUrl = `https://music.youtube.com/search?q=${query}`;
+      Linking.openURL(ytUrl).catch(() => {
+        Linking.openURL(`https://www.google.com/search?q=${encodeURIComponent(`${track} ${artist} music`)}`);
+      });
+    });
   };
 
   // Filter list
@@ -706,13 +730,18 @@ export default function FeedScreen() {
                   <Text style={styles.desc}>{m.desc}</Text>
                   
                   {m.spotify && (
-                    <View style={styles.spotify}>
+                    <TouchableOpacity 
+                      style={styles.spotify}
+                      onPress={() => openSpotifySearch(m.spotify!.track, m.spotify!.artist)}
+                      activeOpacity={0.7}
+                    >
                       <Text style={{ fontSize: 15, color: '#1DB954' }}>♫</Text>
                       <Text style={styles.spotifyText}>
                         <Text style={{ fontWeight: '600', color: '#3a4a3c' }}>{m.spotify.track}</Text>
                         {' · '}{m.spotify.artist}
                       </Text>
-                    </View>
+                      <Text style={{ fontSize: 10, color: '#1DB954', marginLeft: 'auto' }}>▶ Ouvir</Text>
+                    </TouchableOpacity>
                   )}
                   
                   <View style={styles.foot}>
@@ -812,31 +841,27 @@ export default function FeedScreen() {
                 onChangeText={setFormDesc}
               />
 
-              {/* Location */}
-              <Text style={styles.label}>Localização (Endereço/Cidade)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Ex: Jardins, São Paulo"
-                value={formLoc}
-                onChangeText={setFormLoc}
+              {/* Location Search */}
+              <Text style={styles.label}>Localização</Text>
+              <LocationSearch
+                locationText={formLoc}
+                onSelect={(location, lat, lng) => {
+                  setFormLoc(location);
+                  setFormLat(lat);
+                  setFormLng(lng);
+                }}
               />
 
-              {/* Spotify Details */}
-              <Text style={styles.label}>Trilha Sonora (Spotify)</Text>
-              <View style={styles.row}>
-                <TextInput
-                  style={[styles.input, { flex: 1, marginRight: 8 }]}
-                  placeholder="Nome da Música"
-                  value={formSpotifyTrack}
-                  onChangeText={setFormSpotifyTrack}
-                />
-                <TextInput
-                  style={[styles.input, { flex: 1 }]}
-                  placeholder="Artista"
-                  value={formSpotifyArtist}
-                  onChangeText={setFormSpotifyArtist}
-                />
-              </View>
+              {/* Music Search */}
+              <Text style={styles.label}>Trilha Sonora 🎵</Text>
+              <MusicSearch
+                trackName={formSpotifyTrack}
+                artistName={formSpotifyArtist}
+                onSelect={(track, artist) => {
+                  setFormSpotifyTrack(track);
+                  setFormSpotifyArtist(artist);
+                }}
+              />
 
               {/* Photo Upload Input (Web-compatible file picker) */}
               <Text style={styles.label}>Foto</Text>
@@ -846,10 +871,10 @@ export default function FeedScreen() {
                     type="file"
                     accept="image/*"
                     onChange={handlePickFile}
-                    style={styles.fileInputWeb}
+                    style={webStyles.fileInputWeb}
                     id="file-upload-input"
                   />
-                  <label htmlFor="file-upload-input" style={styles.fileUploadLabel}>
+                  <label htmlFor="file-upload-input" style={webStyles.fileUploadLabel}>
                     📸 Escolher Foto
                   </label>
                   {formPhotoUrl ? (
@@ -943,6 +968,27 @@ export default function FeedScreen() {
   );
 }
 
+const webStyles = {
+  fileInputWeb: {
+    display: 'none',
+  } as any,
+  fileUploadLabel: {
+    display: 'inline-block',
+    backgroundColor: COLORS.bg,
+    borderStyle: 'dashed',
+    borderWidth: 1.5,
+    borderColor: COLORS.muted,
+    padding: 12,
+    borderRadius: RADIUS.sm,
+    textAlign: 'center',
+    cursor: 'pointer',
+    fontSize: 13,
+    color: COLORS.text,
+    fontWeight: '500',
+    width: '100%',
+  } as any,
+};
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.bg },
   header: {
@@ -1034,8 +1080,6 @@ const styles = StyleSheet.create({
   starsRow: { flexDirection: 'row', gap: 8, marginBottom: 16 },
   
   filePickerContainer: { width: '100%', marginBottom: 16, alignItems: 'center' },
-  fileInputWeb: { display: 'none' },
-  fileUploadLabel: { display: 'inline-block', backgroundColor: COLORS.bg, borderStyle: 'dashed', borderWidth: 1.5, borderColor: COLORS.muted, padding: 12, borderRadius: RADIUS.sm, textAlign: 'center', cursor: 'pointer', fontSize: 13, color: COLORS.text, fontWeight: '500', width: '100%' },
   uploadPreview: { width: 100, height: 100, borderRadius: RADIUS.sm, marginTop: 10, resizeMode: 'cover' },
 
   modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
