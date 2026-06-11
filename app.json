@@ -1,17 +1,19 @@
 {
   "expo": {
-    "name": "Nosso Espaço",
-    "slug": "nosso-espaco",
+    "name": "Malcci 💕",
+    "slug": "malcci",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "nossoespaco",
+    "scheme": "malcci",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/images/icon.png",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.leonardo.malcci"
     },
     "android": {
+      "package": "com.leonardo.malcci",
       "adaptiveIcon": {
         "backgroundColor": "#C85A7C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

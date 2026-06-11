@@ -1,4 +1,4 @@
-// Gera os PNGs de ícone/splash/favicon do app "Nosso Espaço" a partir de um
+// Gera os PNGs de ícone/splash/favicon do app "Malcci" a partir de um
 // SVG de marca (coração), usando sharp. Rode: node scripts/generate-icons.mjs
 
 import sharp from 'sharp';
@@ -54,7 +54,7 @@ async function render(svg, size, outName) {
 }
 
 async function main() {
-  console.log('Gerando ícones de "Nosso Espaço"...');
+  console.log('Gerando ícones de "Malcci"...');
   // Ícone principal (fundo gradiente + coração branco)
   await render(buildSvg({ size: 1024, bg: 'gradient', heartColor: '#ffffff', heartFrac: 0.46, glow: true }), 1024, 'icon.png');
   // Favicon

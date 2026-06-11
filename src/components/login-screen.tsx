@@ -42,7 +42,7 @@ export default function LoginScreen() {
         </View>
 
         {/* Header */}
-        <Text style={styles.title}>Nosso Espaço</Text>
+        <Text style={styles.title}>Malcci 💕</Text>
         <Text style={styles.subtitle}>Escolha quem está entrando hoje</Text>
 
         {/* User Selection Buttons */}
