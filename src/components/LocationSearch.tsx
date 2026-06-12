@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
 import { COLORS, RADIUS } from '@/constants/theme';
 import { getErrorMessage } from '@/lib/errors';
 
@@ -10,6 +10,7 @@ interface NominatimPlace {
   lon: string;
   type: string;
   address?: {
+    house_number?: string;
     road?: string;
     suburb?: string;
     city?: string;
@@ -25,6 +26,7 @@ interface LocationSearchProps {
   onSelect: (location: string, lat: number | null, lng: number | null) => void;
   onClear?: () => void;
   placeholder?: string;
+  countrycodes?: string;
 }
 
 const SEARCH_DEBOUNCE_MS = 500; // Nominatim pede rate limiting
@@ -57,7 +59,7 @@ async function fetchJsonWithTimeout<T>(
   }
 }
 
-export default function LocationSearch({ locationText, onSelect, onClear, placeholder }: LocationSearchProps) {
+export default function LocationSearch({ locationText, onSelect, onClear, placeholder, countrycodes }: LocationSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<NominatimPlace[]>([]);
   const [loading, setLoading] = useState(false);
@@ -105,7 +107,8 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
 
       try {
         const encodedQuery = encodeURIComponent(trimmed);
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedQuery}&limit=${RESULT_LIMIT}&addressdetails=1&accept-language=pt-BR`;
+        const countryParam = countrycodes ? `&countrycodes=${countrycodes}` : '';
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedQuery}&limit=${RESULT_LIMIT}&addressdetails=1&accept-language=pt-BR${countryParam}`;
 
         const data = await fetchJsonWithTimeout<NominatimPlace[]>(url, controller.signal, {
           headers: {
@@ -150,7 +153,22 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
 
     if (addr) {
       const parts: string[] = [];
-      if (addr.road) parts.push(addr.road);
+
+      // Extract primary name of the place / POI if present
+      const firstName = item.display_name.split(',')[0].trim();
+      const isRoad = addr.road && firstName.toLowerCase() === addr.road.toLowerCase();
+      const isHouseNumber = addr.house_number && firstName === addr.house_number;
+
+      if (firstName && !isRoad && !isHouseNumber) {
+        parts.push(firstName);
+      }
+
+      // Append road with house number if available
+      if (addr.road) {
+        const roadPart = addr.house_number ? `${addr.road}, ${addr.house_number}` : addr.road;
+        parts.push(roadPart);
+      }
+
       if (addr.suburb) parts.push(addr.suburb);
       const city = addr.city || addr.town || addr.village;
       if (city) parts.push(city);
@@ -228,13 +246,47 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
               value={query}
               onChangeText={handleChangeText}
               autoCorrect={false}
+              onSubmitEditing={() => {
+                if (timerRef.current) clearTimeout(timerRef.current);
+                searchLocation(query);
+              }}
+              returnKeyType="search"
             />
             {loading && <ActivityIndicator size="small" color={COLORS.accent} style={{ marginLeft: 6 }} />}
           </View>
 
-          {showResults && !searchError && results.length > 0 && (
-            <View style={styles.resultsList}>
-              {results.map((item) => (
+          {showResults && (
+            <ScrollView 
+              style={styles.resultsList} 
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={true}
+            >
+              {/* Option to use custom typed text */}
+              {query.trim().length > 0 && (
+                <TouchableOpacity
+                  style={[styles.resultItem, styles.customResultItem]}
+                  onPress={() => {
+                    cancelPendingSearch();
+                    onSelect(query.trim(), null, null);
+                    setQuery('');
+                    setResults([]);
+                    setShowResults(false);
+                    setSearchError(false);
+                    setLoading(false);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.resultIcon}>✍️</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.customResultText} numberOfLines={1}>
+                      Usar texto digitado: "{query.trim()}"
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              {/* API results */}
+              {!searchError && results.map((item) => (
                 <TouchableOpacity
                   key={item.place_id}
                   style={styles.resultItem}
@@ -249,19 +301,21 @@ export default function LocationSearch({ locationText, onSelect, onClear, placeh
                   </View>
                 </TouchableOpacity>
               ))}
-            </View>
-          )}
 
-          {showResults && searchError && !loading && (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>Não foi possível buscar locais — tente de novo.</Text>
-            </View>
-          )}
+              {/* API search error message */}
+              {searchError && !loading && (
+                <View style={styles.errorInnerBox}>
+                  <Text style={styles.errorText}>Falha ao buscar locais online — selecione o texto digitado acima se desejar.</Text>
+                </View>
+              )}
 
-          {showResults && !searchError && results.length === 0 && !loading && query.trim().length >= MIN_QUERY_LENGTH && (
-            <View style={styles.noResultsBox}>
-              <Text style={styles.noResultsText}>Nenhum local encontrado para "{query}"</Text>
-            </View>
+              {/* API no results message */}
+              {!searchError && results.length === 0 && !loading && query.trim().length >= MIN_QUERY_LENGTH && (
+                <View style={styles.noResultsInnerBox}>
+                  <Text style={styles.noResultsText}>Nenhum local encontrado no mapa.</Text>
+                </View>
+              )}
+            </ScrollView>
           )}
         </View>
       )}
@@ -348,14 +402,11 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
   },
 
-  errorBox: {
+  errorInnerBox: {
+    padding: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: COLORS.border,
     backgroundColor: '#fdf1f1',
-    borderWidth: 1,
-    borderColor: '#e8c5c5',
-    borderTopWidth: 0,
-    borderBottomLeftRadius: RADIUS.sm,
-    borderBottomRightRadius: RADIUS.sm,
-    padding: 16,
   },
   errorText: {
     fontSize: 12,
@@ -363,19 +414,26 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  noResultsBox: {
+  noResultsInnerBox: {
+    padding: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: COLORS.border,
     backgroundColor: COLORS.surface,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    borderTopWidth: 0,
-    borderBottomLeftRadius: RADIUS.sm,
-    borderBottomRightRadius: RADIUS.sm,
-    padding: 16,
   },
   noResultsText: {
     fontSize: 12,
     color: COLORS.muted,
     textAlign: 'center',
     fontStyle: 'italic',
+  },
+  customResultItem: {
+    backgroundColor: COLORS.accentSoft,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  customResultText: {
+    fontSize: 13,
+    color: COLORS.accentDeep,
+    fontWeight: '600',
   },
 });

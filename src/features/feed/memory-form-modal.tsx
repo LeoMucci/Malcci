@@ -354,6 +354,7 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
                     setLatitude(lat);
                     setLongitude(lng);
                   }}
+                  countrycodes={type === 'travel' ? undefined : 'br'}
                 />
               </>
             )}
