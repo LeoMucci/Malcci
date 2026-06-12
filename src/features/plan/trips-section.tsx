@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { Linking, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useToast } from '@/components/ui/toast';
 import { sharedStyles } from '@/constants/shared-styles';
+import DatePicker from '@/components/DatePicker';
 import { COLORS, RADIUS } from '@/constants/theme';
 import { LIMITS } from '@/lib/validation';
 import { PlanModal, planFeatureStyles } from './plan-modal';
@@ -195,20 +196,20 @@ export function TripsSection({
         <View style={styles.datesRow}>
           <View style={styles.dateCol}>
             <Text style={sharedStyles.label}>Data de Início</Text>
-            <TextInput
-              style={sharedStyles.input}
-              placeholder="YYYY-MM-DD"
+            <DatePicker
               value={formStart}
-              onChangeText={setFormStart}
+              onChange={setFormStart}
+              placeholder="Início"
+              style={{ marginBottom: 10 }}
             />
           </View>
           <View style={styles.dateColLast}>
             <Text style={sharedStyles.label}>Data de Fim</Text>
-            <TextInput
-              style={sharedStyles.input}
-              placeholder="YYYY-MM-DD"
+            <DatePicker
               value={formEnd}
-              onChangeText={setFormEnd}
+              onChange={setFormEnd}
+              placeholder="Fim"
+              style={{ marginBottom: 10 }}
             />
           </View>
         </View>

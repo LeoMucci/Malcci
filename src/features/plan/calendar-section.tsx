@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { sharedStyles } from '@/constants/shared-styles';
 import { COLORS, RADIUS } from '@/constants/theme';
+import DatePicker from '@/components/DatePicker';
 import { LIMITS } from '@/lib/validation';
 import { addMonths, buildCalendarCells, daysUntil, findNextEvent, formatDaysLeft, isDateInEvent } from './calendar-utils';
 import { PlanModal, planFeatureStyles } from './plan-modal';
@@ -281,19 +282,20 @@ export function CalendarSection({
         />
 
         <Text style={sharedStyles.label}>Data de Início</Text>
-        <TextInput
-          style={sharedStyles.input}
-          placeholder="YYYY-MM-DD"
+        <DatePicker
           value={formDate}
-          onChangeText={setFormDate}
+          onChange={setFormDate}
+          placeholder="Selecionar data de início"
+          style={{ marginBottom: 10 }}
         />
 
         <Text style={sharedStyles.label}>Data de Fim (opcional)</Text>
-        <TextInput
-          style={sharedStyles.input}
-          placeholder="YYYY-MM-DD"
+        <DatePicker
           value={formEndDate}
-          onChangeText={setFormEndDate}
+          onChange={setFormEndDate}
+          placeholder="Sem data de fim"
+          clearable
+          style={{ marginBottom: 10 }}
         />
 
         <Text style={sharedStyles.label}>Notas / Descrição (opcional)</Text>

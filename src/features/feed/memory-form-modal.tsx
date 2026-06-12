@@ -8,6 +8,7 @@ import { COLORS, MTYPE, RADIUS } from '@/constants/theme';
 import { sharedStyles } from '@/constants/shared-styles';
 import { useToast } from '@/components/ui/toast';
 import { isNonEmpty, LIMITS } from '@/lib/validation';
+import DatePicker from '@/components/DatePicker';
 import LocationSearch from '@/components/LocationSearch';
 import MusicSearch, { type SelectedTrackMeta } from '@/components/MusicSearch';
 import type { MemoryType } from '@/types/domain';
@@ -308,16 +309,13 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
               maxLength={LIMITS.title}
             />
 
-            {/* Data da Memória */}
-            <Text style={styles.sectionLabel}>📅 Data da memória (Ano-Mês-Dia) *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Ex: 2026-06-12"
-              placeholderTextColor="#b6a3aa"
-              value={date}
-              onChangeText={setDate}
-              maxLength={10}
-            />
+             {/* Data da Memória */}
+             <Text style={styles.sectionLabel}>📅 Data da memória *</Text>
+             <DatePicker
+               value={date}
+               onChange={setDate}
+               placeholder="Selecionar data"
+             />
 
             {/* Avaliação (só restaurante/filme) */}
             {cfg.showRating && (

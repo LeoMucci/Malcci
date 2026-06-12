@@ -137,11 +137,16 @@ function parseDateSafe(dateStr: string | null | undefined): number {
 }
 
 function sortMemories(list: MemoryView[]): MemoryView[] {
-  return list.slice().sort((a, b) => {
+  const sorted = list.slice().sort((a, b) => {
     const timeA = parseDateSafe(a.createdAt);
     const timeB = parseDateSafe(b.createdAt);
     return timeB - timeA;
   });
+  console.log('--- ORDENAÇÃO DO FEED ---');
+  sorted.forEach(m => {
+    console.log(`[Feed] "${m.title}" | Exibido: "${m.date}" | Raw: "${m.createdAt}" | Time: ${parseDateSafe(m.createdAt)}`);
+  });
+  return sorted;
 }
 
 /** Aplica um toggle de reação localmente (atualização otimista). */

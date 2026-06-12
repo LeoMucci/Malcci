@@ -5,6 +5,7 @@
 
 import React, { memo, useCallback, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Platform,
   StyleSheet,
@@ -61,6 +62,25 @@ const VideoItem = memo(({ uri, width }: { uri: string; width: number }) => {
   );
 });
 
+const CarouselImage = memo(({ uri, width }: { uri: string; width: number }) => {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <View style={{ width, height: PHOTO_HEIGHT, position: 'relative', backgroundColor: COLORS.bg, justifyContent: 'center', alignItems: 'center' }}>
+      {!loaded && (
+        <ActivityIndicator size="small" color={COLORS.accent} style={{ position: 'absolute' }} />
+      )}
+      <Image
+        source={{ uri }}
+        style={[styles.image, { width }]}
+        contentFit="cover"
+        transition={250}
+        cachePolicy="disk"
+        onLoad={() => setLoaded(true)}
+      />
+    </View>
+  );
+});
+
 interface PhotoCarouselProps {
   photos: string[];
   placeholderEmoji: string;
@@ -91,7 +111,7 @@ function PhotoCarouselBase({ photos, placeholderEmoji, placeholderTint }: PhotoC
     if (isVideo) {
       return <VideoItem uri={item} width={width} />;
     }
-    return <Image source={{ uri: item }} style={[styles.image, { width }]} contentFit="cover" transition={200} cachePolicy="disk" />;
+    return <CarouselImage uri={item} width={width} />;
   }, [width]);
 
   const keyExtractor = useCallback((item: string, i: number) => `${i}-${item}`, []);
@@ -111,7 +131,7 @@ function PhotoCarouselBase({ photos, placeholderEmoji, placeholderTint }: PhotoC
         {isVideo ? (
           <VideoItem uri={photos[0]} width={width} />
         ) : (
-          <Image source={{ uri: photos[0] }} style={[styles.image, { width: width || undefined }]} contentFit="cover" transition={200} cachePolicy="disk" />
+          <CarouselImage uri={photos[0]} width={width} />
         )}
       </View>
     );
@@ -146,7 +166,7 @@ function PhotoCarouselBase({ photos, placeholderEmoji, placeholderTint }: PhotoC
 export const PhotoCarousel = memo(PhotoCarouselBase);
 
 const styles = StyleSheet.create({
-  frame: { width: '100%', height: PHOTO_HEIGHT, backgroundColor: '#000', position: 'relative' },
+  frame: { width: '100%', height: PHOTO_HEIGHT, backgroundColor: COLORS.bg, position: 'relative' },
   image: { height: PHOTO_HEIGHT },
   video: { height: PHOTO_HEIGHT },
   placeholder: { width: '100%', height: PHOTO_HEIGHT, alignItems: 'center', justifyContent: 'center' },

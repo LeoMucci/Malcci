@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { COLORS, RADIUS } from '@/constants/theme';
+import DatePicker from '@/components/DatePicker';
 import { COUPLE } from '@/constants/config';
 import { sharedStyles } from '@/constants/shared-styles';
 import { useToast } from '@/components/ui/toast';
@@ -115,12 +116,12 @@ export function HomeHero({ stats, startIso, onSaveStartDate, userName, isUserA }
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>Alterar Data de Namoro</Text>
 
-            <Text style={sharedStyles.label}>Nova Data (AAAA-MM-DD)</Text>
-            <TextInput
-              style={sharedStyles.input}
-              placeholder="Ex: 2024-12-06"
+            <Text style={sharedStyles.label}>Nova Data</Text>
+            <DatePicker
               value={dateInput}
-              onChangeText={setDateInput}
+              onChange={setDateInput}
+              placeholder="Selecionar data"
+              style={{ marginBottom: 10 }}
             />
 
             <View style={styles.modalButtons}>
