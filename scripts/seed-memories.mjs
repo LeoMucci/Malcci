@@ -274,9 +274,10 @@ const MEMORIES = [
 
 async function main() {
   const titles = MEMORIES.map(m => m.title);
+  
   const { data: existing, error: selectError } = await supabase
     .from('memories')
-    .select('title')
+    .select('id, title, latitude, longitude')
     .in('title', titles);
 
   if (selectError) {
@@ -284,7 +285,24 @@ async function main() {
     process.exit(1);
   }
 
-  const existingTitles = new Set((existing ?? []).map(r => r.title));
+  const existingRows = existing ?? [];
+  const existingTitles = new Set(existingRows.map(r => r.title));
+
+  console.log('Verificando atualizações de coordenadas para memórias existentes...');
+  for (const row of existingRows) {
+    const seed = MEMORIES.find(m => m.title === row.title);
+    if (seed && seed.latitude && seed.longitude && (row.latitude === null || row.longitude === null)) {
+      console.log(`Atualizando coordenadas de: "${row.title}" -> Lat: ${seed.latitude}, Lng: ${seed.longitude}`);
+      const { error: updateError } = await supabase
+        .from('memories')
+        .update({ latitude: seed.latitude, longitude: seed.longitude })
+        .eq('id', row.id);
+      if (updateError) {
+        console.error(`Falha ao atualizar coordenadas de "${row.title}":`, updateError.message);
+      }
+    }
+  }
+
   const toInsert = MEMORIES.filter(m => !existingTitles.has(m.title)).map(m => {
     const row = {
       type: m.type,

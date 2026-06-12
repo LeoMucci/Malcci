@@ -25,7 +25,8 @@ function normalizeDateStr(dateStr: string): string {
     : dateStr;
 }
 
-function formatMemoryDate(createdAt: string): string {
+function formatMemoryDate(createdAt: string | null | undefined): string {
+  if (!createdAt) return 'Data';
   const norm = normalizeDateStr(createdAt);
   const d = new Date(norm);
   if (isNaN(d.getTime())) {
