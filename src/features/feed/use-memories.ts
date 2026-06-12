@@ -18,8 +18,24 @@ import type { MemoryCommentView, MemoryFormValues, MemoryId, MemoryView } from '
 
 const FEED_TABLES = ['memories', 'memory_reactions', 'memory_comments', 'favorites', 'memory_spotify', 'memory_photos'] as const;
 
+function normalizeDateStr(dateStr: string): string {
+  if (!dateStr) return '';
+  return dateStr.includes(' ') && !dateStr.includes('T')
+    ? dateStr.replace(' ', 'T')
+    : dateStr;
+}
+
 function formatMemoryDate(createdAt: string): string {
-  return new Date(createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+  const norm = normalizeDateStr(createdAt);
+  const d = new Date(norm);
+  if (isNaN(d.getTime())) {
+    const match = createdAt.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      return `${match[3]}/${match[2]}`;
+    }
+    return 'Data';
+  }
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
 }
 
 function deriveTag(row: MemoryRow): string {
@@ -113,10 +129,17 @@ function buildMockMemories(): MemoryView[] {
   }));
 }
 
+function parseDateSafe(dateStr: string | null | undefined): number {
+  if (!dateStr) return 0;
+  const norm = normalizeDateStr(dateStr);
+  const time = Date.parse(norm);
+  return isNaN(time) ? 0 : time;
+}
+
 function sortMemories(list: MemoryView[]): MemoryView[] {
   return list.slice().sort((a, b) => {
-    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    const timeA = parseDateSafe(a.createdAt);
+    const timeB = parseDateSafe(b.createdAt);
     return timeB - timeA;
   });
 }

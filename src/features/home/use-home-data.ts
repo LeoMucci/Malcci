@@ -57,7 +57,14 @@ const MOCK_MESSAGE: HomeMessagePreview = {
 };
 
 function toMemoryPreview(row: MemoryRow, currentUserId: number): HomeMemoryPreview {
-  const createdAt = new Date(row.created_at);
+  const norm = row.created_at.includes(' ') && !row.created_at.includes('T')
+    ? row.created_at.replace(' ', 'T')
+    : row.created_at;
+  const createdAt = new Date(norm);
+  const formattedDate = isNaN(createdAt.getTime())
+    ? (row.created_at.substring(8, 10) + '/' + row.created_at.substring(5, 7))
+    : createdAt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+
   // PostgREST devolve memory_spotify como objeto único (1-para-1) ou array.
   const spotifyRow = Array.isArray(row.spotify) ? row.spotify[0] : row.spotify ?? undefined;
   return {
@@ -65,7 +72,7 @@ function toMemoryPreview(row: MemoryRow, currentUserId: number): HomeMemoryPrevi
     cat: row.type,
     tag: row.rating && row.rating > 0 ? `${row.rating} estrelas` : 'recente',
     title: row.title,
-    date: createdAt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }),
+    date: formattedDate,
     by: row.author?.display_name ?? FALLBACK_AUTHOR,
     loc: row.location,
     desc: row.description ?? '',
