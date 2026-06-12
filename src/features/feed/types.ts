@@ -11,6 +11,7 @@ export type MemoryId = number | string;
 export interface MemoryCommentView {
   who: string;
   text: string;
+  authorAvatarUrl?: string | null;
 }
 
 export interface SpotifyTrackView {
@@ -27,6 +28,7 @@ export interface MemoryView {
   title: string;
   date: string;
   by: string;
+  byAvatarUrl?: string | null;
   loc: string | null;
   desc: string;
   stars: number;
@@ -58,6 +60,8 @@ export interface MemoryFormValues {
   photoUrls: string[];
   /** Fotos novas escolhidas (web: File; nativo: base64) a serem enviadas. */
   pickedPhotos: PickedPhoto[];
+  /** Data da memória no formato YYYY-MM-DD. */
+  date: string;
 }
 
 export const FEED_FILTERS = [
@@ -65,8 +69,11 @@ export const FEED_FILTERS = [
   { key: 'fav', label: '★ Favoritas' },
   { key: 'restaurant', label: 'Restaurantes' },
   { key: 'place', label: 'Lugares' },
+  { key: 'travel', label: 'Viagens ✈️' },
   { key: 'movie', label: 'Filmes' },
   { key: 'special', label: 'Especiais' },
+  { key: 'date', label: 'Encontros 🌹' },
+  { key: 'passeio', label: 'Passeios 🗺️' },
 ] as const;
 
 export type FeedFilterKey = (typeof FEED_FILTERS)[number]['key'];

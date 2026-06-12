@@ -14,7 +14,7 @@ import { cleanText, isNonEmpty, LIMITS } from '@/lib/validation';
 import type { MemoryCommentRow, MemoryPhotoRow, MemoryRow } from '@/types/domain';
 import { insertMemorySpotify, loadMemoryRows, syncMemoryPhotos } from './feed-api';
 import { uploadPickedPhoto } from './upload-photo';
-import type { MemoryFormValues, MemoryId, MemoryView } from './types';
+import type { MemoryCommentView, MemoryFormValues, MemoryId, MemoryView } from './types';
 
 const FEED_TABLES = ['memories', 'memory_reactions', 'memory_comments', 'favorites', 'memory_spotify', 'memory_photos'] as const;
 
@@ -25,11 +25,21 @@ function formatMemoryDate(createdAt: string): string {
 function deriveTag(row: MemoryRow): string {
   if (row.type === 'movie') return 'assistido';
   if (row.rating === 5) return '5 estrelas';
-  return row.type === 'place' ? 'viagem' : 'momento';
+  if (row.type === 'place') return 'lugar';
+  if (row.type === 'passeio') return 'passeio';
+  if (row.type === 'date') return 'encontro';
+  if (row.type === 'restaurant') return 'restaurante';
+  if (row.type === 'shopping') return 'compra';
+  if (row.type === 'travel') return 'viagem';
+  return 'momento';
 }
 
-function toCommentView(comment: MemoryCommentRow): { who: string; text: string } {
-  return { who: comment.author?.display_name || 'Alguém', text: comment.content };
+function toCommentView(comment: MemoryCommentRow): MemoryCommentView {
+  return {
+    who: comment.author?.display_name || 'Alguém',
+    text: comment.content,
+    authorAvatarUrl: comment.author?.avatar_url || null,
+  };
 }
 
 /** Lista ordenada de fotos: usa memory_photos se houver, senão a capa única. */
@@ -54,6 +64,7 @@ function toMemoryView(row: MemoryRow, currentUserId: number): MemoryView {
     title: row.title,
     date: formatMemoryDate(row.created_at),
     by: row.author?.display_name || 'Parceiro',
+    byAvatarUrl: row.author?.avatar_url || null,
     loc: row.location,
     desc: row.description || '',
     stars: row.rating || 0,
@@ -74,6 +85,13 @@ function toMemoryView(row: MemoryRow, currentUserId: number): MemoryView {
   };
 }
 
+function parseMockDate(id: string): string {
+  if (id === 'm1') return '2026-06-01T12:00:00.000Z';
+  if (id === 'm2') return '2026-05-28T12:00:00.000Z';
+  if (id === 'm3') return '2025-07-14T12:00:00.000Z';
+  return '2025-02-14T12:00:00.000Z';
+}
+
 function buildMockMemories(): MemoryView[] {
   return FEED.map(m => ({
     id: m.id,
@@ -91,7 +109,16 @@ function buildMockMemories(): MemoryView[] {
     reactions: m.reactions.map(r => ({ emoji: r.e, count: r.n, mine: r.mine })),
     spotify: m.spotify ? { track: m.spotify.track, artist: m.spotify.artist, previewUrl: null, albumArt: null } : null,
     comments: m.comments,
+    createdAt: parseMockDate(String(m.id)),
   }));
+}
+
+function sortMemories(list: MemoryView[]): MemoryView[] {
+  return list.slice().sort((a, b) => {
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return timeB - timeA;
+  });
 }
 
 /** Aplica um toggle de reação localmente (atualização otimista). */
@@ -119,16 +146,17 @@ export function useMemories() {
   const reload = useCallback(async () => {
     setLoading(true);
     if (!isSupabaseConfigured) {
-      setMemories(buildMockMemories());
+      setMemories(sortMemories(buildMockMemories()));
       setLoading(false);
       return;
     }
     try {
       const rows = await loadMemoryRows();
-      setMemories(rows.map(row => toMemoryView(row, userId ?? -1)));
+      const mapped = rows.map(row => toMemoryView(row, userId ?? -1));
+      setMemories(sortMemories(mapped));
     } catch (err) {
       console.error('Failed to load memories from Supabase:', err);
-      setMemories(prev => (prev.length > 0 ? prev : buildMockMemories()));
+      setMemories(prev => (prev.length > 0 ? prev : sortMemories(buildMockMemories())));
     } finally {
       setLoading(false);
     }
@@ -233,8 +261,9 @@ export function useMemories() {
         const mockSpotify = hasSpotify
           ? { track, artist, previewUrl: values.spotifyPreviewUrl || null, albumArt: values.spotifyAlbumArt || null }
           : null;
+        const formattedDate = formatMemoryDate(new Date(`${values.date}T12:00:00`).toISOString());
         if (editingId) {
-          setMemories(prev => prev.map(m => (m.id !== editingId ? m : {
+          setMemories(prev => sortMemories(prev.map(m => (m.id !== editingId ? m : {
             ...m,
             cat: values.type,
             title,
@@ -244,14 +273,16 @@ export function useMemories() {
             photoUrl: localPhotos[0] ?? null,
             photos: localPhotos,
             spotify: mockSpotify,
-          })));
+            date: formattedDate,
+            createdAt: new Date(`${values.date}T12:00:00`).toISOString(),
+          }))));
         } else {
-          setMemories(prev => [{
+          setMemories(prev => sortMemories([{
             id: `m_${Date.now()}`,
             cat: values.type,
             tag: 'novo',
             title,
-            date: 'Hoje',
+            date: formattedDate,
             by: user.displayName,
             loc: location || null,
             desc: description,
@@ -262,7 +293,8 @@ export function useMemories() {
             reactions: [],
             spotify: mockSpotify,
             comments: [],
-          }, ...prev]);
+            createdAt: new Date(`${values.date}T12:00:00`).toISOString(),
+          }, ...prev]));
         }
         showToast('Memória salva ✨', 'success');
         return true;
@@ -286,6 +318,7 @@ export function useMemories() {
         rating: hasRating ? values.rating : null,
         photo_url: cover,
         photo_key: coverKey,
+        created_at: new Date(`${values.date}T12:00:00`).toISOString(),
       };
 
       let memoryId: number;
@@ -300,7 +333,7 @@ export function useMemories() {
       } else {
         const { data, error } = await supabase
           .from('memories')
-          .insert({ ...payload, created_by: user.id, created_at: new Date().toISOString() })
+          .insert({ ...payload, created_by: user.id })
           .select('id');
         if (error) throw error;
         const created = (data ?? []) as Array<{ id: number }>;

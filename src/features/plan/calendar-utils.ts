@@ -35,6 +35,12 @@ export function addMonths(date: Date, delta: number): Date {
   return new Date(date.getFullYear(), date.getMonth() + delta, 1);
 }
 
+export function isDateInEvent(dateStr: string, event: CalendarEvent): boolean {
+  if (dateStr === event.eventDate) return true;
+  if (event.endDate && dateStr >= event.eventDate && dateStr <= event.endDate) return true;
+  return false;
+}
+
 /** Monta as 42 células do mês visível, com padding dos meses vizinhos. */
 export function buildCalendarCells(currentDate: Date, events: readonly CalendarEvent[]): CalendarCell[] {
   const year = currentDate.getFullYear();
@@ -44,17 +50,24 @@ export function buildCalendarCells(currentDate: Date, events: readonly CalendarE
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const prevMonthDays = new Date(year, month, 0).getDate();
 
-  const eventDates = new Set(events.map(e => e.eventDate));
   const cells: CalendarCell[] = [];
+
+  const checkHasEvents = (dateStr: string) => {
+    for (let i = 0; i < events.length; i++) {
+      if (isDateInEvent(dateStr, events[i])) return true;
+    }
+    return false;
+  };
 
   // Padding do mês anterior (month - 1 é normalizado pelo Date em toIsoDate)
   for (let i = firstDayIndex - 1; i >= 0; i--) {
     const day = prevMonthDays - i;
+    const dateStr = toIsoDate(year, month - 1, day);
     cells.push({
       day,
       currentMonth: false,
-      dateStr: toIsoDate(year, month - 1, day),
-      hasEvents: false,
+      dateStr,
+      hasEvents: checkHasEvents(dateStr),
     });
   }
 
@@ -65,18 +78,19 @@ export function buildCalendarCells(currentDate: Date, events: readonly CalendarE
       day,
       currentMonth: true,
       dateStr,
-      hasEvents: eventDates.has(dateStr),
+      hasEvents: checkHasEvents(dateStr),
     });
   }
 
   // Padding do próximo mês (month + 1 também é normalizado)
   const remaining = CALENDAR_GRID_SIZE - cells.length;
   for (let day = 1; day <= remaining; day++) {
+    const dateStr = toIsoDate(year, month + 1, day);
     cells.push({
       day,
       currentMonth: false,
-      dateStr: toIsoDate(year, month + 1, day),
-      hasEvents: false,
+      dateStr,
+      hasEvents: checkHasEvents(dateStr),
     });
   }
 

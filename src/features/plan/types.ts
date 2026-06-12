@@ -13,6 +13,7 @@ export interface CalendarEvent {
   title: string;
   description?: string | null;
   eventDate: string;
+  endDate?: string | null;
   category: EventCategory;
 }
 
@@ -50,7 +51,9 @@ export interface Trip {
 export interface EventFormData {
   title: string;
   eventDate: string;
+  endDate?: string | null;
   category: EventCategory;
+  description?: string | null;
 }
 
 /** Payload do formulário de viagem. `budgetText` é texto cru do input numérico. */
@@ -92,12 +95,31 @@ export interface TripWithItemsRow extends TripRow {
   description?: string | null;
 }
 
+export function parseEventDescription(desc: string | null): { description: string | null; endDate: string | null } {
+  if (!desc) return { description: null, endDate: null };
+  const trimmed = desc.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return {
+        description: parsed.description || parsed.notes || null,
+        endDate: parsed.endDate || null,
+      };
+    } catch {
+      return { description: desc, endDate: null };
+    }
+  }
+  return { description: desc, endDate: null };
+}
+
 export function mapEventRow(row: CalendarEventRow): CalendarEvent {
+  const { description, endDate } = parseEventDescription(row.description);
   return {
     id: row.id,
     title: row.title,
-    description: row.description,
+    description,
     eventDate: row.event_date,
+    endDate,
     category: toEventCategory(row.category),
   };
 }

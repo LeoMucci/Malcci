@@ -28,6 +28,12 @@ export const COLORS = {
   specialTint: '#fae7ef',
   shopping: '#b08a2e',
   shoppingTint: '#faf3e2',
+  date: '#b03b57',
+  dateTint: '#fae9ec',
+  passeio: '#3b91a0',
+  passeioTint: '#e7f7fa',
+  travel: '#4a7bb0',
+  travelTint: '#e8f0f8',
 };
 
 export const FONTS = {
@@ -60,9 +66,12 @@ export const RADIUS = {
 export const MTYPE: Record<string, { label: string; icon: string; color: string; tint: string }> = {
   restaurant: { label: 'restaurante', icon: 'restaurant', color: COLORS.restaurant, tint: COLORS.restaurantTint },
   movie:      { label: 'filme',       icon: 'movie',      color: COLORS.film,       tint: COLORS.filmTint },
-  place:      { label: 'lugar',       icon: 'beach-access', color: COLORS.place,     tint: COLORS.placeTint },
+  place:      { label: 'lugar',       icon: 'place',      color: COLORS.place,     tint: COLORS.placeTint },
   special:    { label: 'especial',    icon: 'auto-awesome', color: COLORS.special,   tint: COLORS.specialTint },
   shopping:   { label: 'compra',      icon: 'card-giftcard', color: COLORS.shopping, tint: COLORS.shoppingTint },
+  date:       { label: 'encontro',    icon: 'favorite',   color: '#b03b57',         tint: '#fae9ec' },
+  passeio:    { label: 'passeio',     icon: 'map',        color: '#3b91a0',         tint: '#e7f7fa' },
+  travel:     { label: 'viagem',      icon: 'flight',     color: '#4a7bb0',         tint: '#e8f0f8' },
   other:      { label: 'momento',     icon: 'favorite',    color: COLORS.special,    tint: COLORS.specialTint },
 };
 

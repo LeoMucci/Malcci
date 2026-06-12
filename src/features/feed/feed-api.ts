@@ -1,52 +1,72 @@
-// Acesso ao Supabase para o feed. Degrada graciosamente quando a migração
-// (tabela memory_photos, colunas preview_url/album_art) ainda não foi aplicada:
-// nesse caso usa só a capa em memories.photo_url, como antes.
+// Acesso ao Supabase para o feed. Degrada graciosamente quando as migrações
+// (tabela memory_photos, colunas users.avatar_url) ainda não foram aplicadas.
 
 import { supabase } from '@/lib/supabase';
 import type { MemoryRow } from '@/types/domain';
 
-const SELECT_WITH_PHOTOS = `
-  *,
-  author:users(display_name),
-  comments:memory_comments(id, content, author:users(display_name)),
-  reactions:memory_reactions(id, emoji, user_id),
-  favorites:favorites(user_id),
-  spotify:memory_spotify(*),
-  photos:memory_photos(photo_url, position)
-`;
-
-const SELECT_BASE = `
-  *,
-  author:users(display_name),
-  comments:memory_comments(id, content, author:users(display_name)),
-  reactions:memory_reactions(id, emoji, user_id),
-  favorites:favorites(user_id),
-  spotify:memory_spotify(*)
-`;
-
-// Lembra se o schema estendido existe, para não repetir a tentativa que falha.
+// Lembra se as tabelas/colunas estendidas existem, para não repetir tentativas falhas.
 let photosTableAvailable: boolean | null = null;
+let usersAvatarUrlAvailable: boolean | null = null;
 
-/** Carrega as memórias com todos os joins; cai para o select base se memory_photos não existir. */
+function buildSelectString(): string {
+  const authorFields = usersAvatarUrlAvailable !== false ? 'display_name, avatar_url' : 'display_name';
+  const authorSelect = `author:users(${authorFields})`;
+  const commentsSelect = `comments:memory_comments(id, content, author:users(${authorFields}))`;
+  const photosSelect = photosTableAvailable !== false ? ', photos:memory_photos(photo_url, position)' : '';
+
+  return `
+    *,
+    ${authorSelect},
+    ${commentsSelect},
+    reactions:memory_reactions(id, emoji, user_id),
+    favorites:favorites(user_id),
+    spotify:memory_spotify(*)${photosSelect}
+  `;
+}
+
+/** Carrega as memórias com todos os joins; cai para fallbacks se tabelas ou colunas não existirem. */
 export async function loadMemoryRows(): Promise<MemoryRow[]> {
-  if (photosTableAvailable !== false) {
+  try {
+    const selectStr = buildSelectString();
     const { data, error } = await supabase
       .from('memories')
-      .select(SELECT_WITH_PHOTOS)
+      .select(selectStr)
       .order('created_at', { ascending: false });
+
     if (!error) {
-      photosTableAvailable = true;
+      if (photosTableAvailable === null) photosTableAvailable = true;
+      if (usersAvatarUrlAvailable === null) usersAvatarUrlAvailable = true;
       return (data ?? []) as unknown as MemoryRow[];
     }
-    photosTableAvailable = false;
-  }
 
-  const { data, error } = await supabase
-    .from('memories')
-    .select(SELECT_BASE)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  return (data ?? []) as unknown as MemoryRow[];
+    // Analisa o erro para desativar recursos em falta
+    const errMessage = error.message.toLowerCase();
+
+    if (errMessage.includes('memory_photos') && photosTableAvailable !== false) {
+      photosTableAvailable = false;
+      return loadMemoryRows(); // Tenta novamente sem a tabela de fotos
+    }
+
+    if (errMessage.includes('avatar_url') && usersAvatarUrlAvailable !== false) {
+      usersAvatarUrlAvailable = false;
+      return loadMemoryRows(); // Tenta novamente sem a coluna avatar_url
+    }
+
+    throw error;
+  } catch (err) {
+    console.warn('Erro ao carregar memórias com recursos estendidos, aplicando fallback total:', err);
+    photosTableAvailable = false;
+    usersAvatarUrlAvailable = false;
+    
+    const selectStr = buildSelectString();
+    const { data, error } = await supabase
+      .from('memories')
+      .select(selectStr)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return (data ?? []) as unknown as MemoryRow[];
+  }
 }
 
 /**
@@ -79,11 +99,7 @@ export interface SpotifyPayload {
   albumArt: string;
 }
 
-/**
- * Insere a trilha sonora. `album_url` já existe no banco; `preview_url` é adicionado
- * pela migração 002. Se a coluna de prévia ainda não existir, salva sem ela
- * (a prévia é buscada sob demanda na hora de tocar).
- */
+/** Insere a trilha sonora. */
 export async function insertMemorySpotify(memoryId: number, payload: SpotifyPayload): Promise<void> {
   const withPreview = {
     memory_id: memoryId,

@@ -16,10 +16,13 @@ export interface MapPoint {
 // Emoji + cor da borda do pin por tipo de memória.
 const PIN_STYLE: Record<string, { emoji: string; color: string }> = {
   special: { emoji: '💖', color: '#C85A7C' },
-  place: { emoji: '🏖️', color: '#477d50' },
+  place: { emoji: '📍', color: '#477d50' },
   restaurant: { emoji: '🍽️', color: '#b06a4e' },
   movie: { emoji: '🎬', color: '#6a55b0' },
   shopping: { emoji: '🛍️', color: '#b08a2e' },
+  date: { emoji: '🌹', color: '#b03b57' },
+  passeio: { emoji: '🗺️', color: '#3b91a0' },
+  travel: { emoji: '✈️', color: '#4a7bb0' },
   other: { emoji: '✨', color: '#C85A7C' },
 };
 

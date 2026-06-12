@@ -103,11 +103,27 @@ export function usePlanData(): PlanData {
       showToast('Data inválida. Use o formato AAAA-MM-DD.', 'error');
       return false;
     }
+    if (form.endDate && !isValidIsoDate(form.endDate)) {
+      showToast('Data de término inválida. Use o formato AAAA-MM-DD.', 'error');
+      return false;
+    }
+
+    const eventDesc = cleanText(form.description ?? '', LIMITS.description);
+    const dbDescription = (form.endDate || eventDesc)
+      ? JSON.stringify({ endDate: form.endDate || null, description: eventDesc || null })
+      : null;
 
     if (!isSupabaseConfigured) {
       setEvents(prev => [
         ...prev,
-        { id: `ev_${Date.now()}`, title, eventDate: form.eventDate, category: form.category },
+        {
+          id: `ev_${Date.now()}`,
+          title,
+          eventDate: form.eventDate,
+          endDate: form.endDate || null,
+          description: eventDesc || null,
+          category: form.category,
+        },
       ]);
       return true;
     }
@@ -115,15 +131,23 @@ export function usePlanData(): PlanData {
     try {
       const { error } = await supabase
         .from('calendar_events')
-        .insert({ title, event_date: form.eventDate, category: form.category });
+        .insert({
+          title,
+          event_date: form.eventDate,
+          category: form.category,
+          description: dbDescription,
+        });
       if (error) throw error;
 
       if (user) {
+        const dateStr = form.endDate 
+          ? `de ${new Date(`${form.eventDate}T12:00:00`).toLocaleDateString('pt-BR')} até ${new Date(`${form.endDate}T12:00:00`).toLocaleDateString('pt-BR')}`
+          : `em ${new Date(`${form.eventDate}T12:00:00`).toLocaleDateString('pt-BR')}`;
         await sendNotification(
           user.id,
           'special_date',
           `${user.displayName} adicionou um evento! 📅`,
-          `Evento: "${title}" em ${new Date(`${form.eventDate}T12:00:00`).toLocaleDateString('pt-BR')}`
+          `Evento: "${title}" ${dateStr}`
         );
       }
 

@@ -43,11 +43,18 @@ const TYPE_CONFIG: Record<MemoryType, TypeConfig> = {
     showLocation: false, locationLabel: '',
   },
   place: {
-    icon: '🏖️', label: 'Lugar',
+    icon: '📍', label: 'Lugar',
     titlePlaceholder: 'Que lugar é esse?',
-    descLabel: 'Como foi o passeio?', descPlaceholder: 'O que rolou por lá…',
+    descLabel: 'Como foi a visita?', descPlaceholder: 'O que rolou por lá…',
     showRating: false, ratingLabel: '',
     showLocation: true, locationLabel: 'Localização',
+  },
+  travel: {
+    icon: '✈️', label: 'Viagem',
+    titlePlaceholder: 'Para onde viajaram?',
+    descLabel: 'Como foi a viagem?', descPlaceholder: 'O que rolou por lá, hotéis, passeios…',
+    showRating: false, ratingLabel: '',
+    showLocation: true, locationLabel: 'Destino',
   },
   special: {
     icon: '💖', label: 'Especial',
@@ -63,6 +70,20 @@ const TYPE_CONFIG: Record<MemoryType, TypeConfig> = {
     showRating: false, ratingLabel: '',
     showLocation: true, locationLabel: 'Onde compraram (opcional)',
   },
+  date: {
+    icon: '🌹', label: 'Encontro',
+    titlePlaceholder: 'Onde foi o encontro?',
+    descLabel: 'Como foi?', descPlaceholder: 'O que fizeram, o que comeram, como foi passar esse tempo juntos…',
+    showRating: false, ratingLabel: '',
+    showLocation: true, locationLabel: 'Local',
+  },
+  passeio: {
+    icon: '🗺️', label: 'Passeio',
+    titlePlaceholder: 'Para onde passearam?',
+    descLabel: 'O que rolou no passeio?', descPlaceholder: 'Histórias, fotos engraçadas, o que visitaram…',
+    showRating: false, ratingLabel: '',
+    showLocation: true, locationLabel: 'Localização',
+  },
   other: {
     icon: '✨', label: 'Momento',
     titlePlaceholder: 'Dê um título',
@@ -72,10 +93,54 @@ const TYPE_CONFIG: Record<MemoryType, TypeConfig> = {
   },
 };
 
-const FORM_TYPES: MemoryType[] = ['restaurant', 'movie', 'place', 'special', 'shopping'];
+const FORM_TYPES: MemoryType[] = ['restaurant', 'movie', 'place', 'travel', 'special', 'shopping', 'date', 'passeio'];
+
 const RATING_STARS = [1, 2, 3, 4, 5];
 const DEFAULT_TYPE: MemoryType = 'special';
 const DEFAULT_RATING = 5;
+
+function formatToYmd(dateOrString?: string | Date): string {
+  if (!dateOrString) {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  const d = new Date(dateOrString);
+  if (isNaN(d.getTime())) {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  }
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function isValidDate(dateStr: string): boolean {
+  const regex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!regex.test(dateStr)) return false;
+  const parts = dateStr.split('-');
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  if (month < 1 || month > 12) return false;
+  const dateObj = new Date(year, month - 1, day);
+  return dateObj.getFullYear() === year && dateObj.getMonth() === month - 1 && dateObj.getDate() === day;
+}
+
+function isVideoUri(uri: string): boolean {
+  const lowercase = uri.toLowerCase();
+  return (
+    lowercase.endsWith('.mp4') ||
+    lowercase.endsWith('.mov') ||
+    lowercase.endsWith('.m4v') ||
+    lowercase.endsWith('.3gp') ||
+    lowercase.includes('video') ||
+    (uri.startsWith('blob:') && uri.includes('video'))
+  );
+}
 
 const WEB_FILE_INPUT_STYLE: React.CSSProperties = { display: 'none' };
 const WEB_FILE_LABEL_STYLE: React.CSSProperties = {
@@ -108,6 +173,7 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
   const [spotifyAlbumArt, setSpotifyAlbumArt] = useState('');
   const [existingUrls, setExistingUrls] = useState<string[]>([]);
   const [newPhotos, setNewPhotos] = useState<PickedPhoto[]>([]);
+  const [date, setDate] = useState('');
 
   useEffect(() => {
     if (!visible) return;
@@ -124,6 +190,7 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
     setSpotifyAlbumArt(editing?.spotify?.albumArt ?? '');
     setExistingUrls(editing?.photos ?? []);
     setNewPhotos([]);
+    setDate(editing?.createdAt ? formatToYmd(editing.createdAt) : formatToYmd());
   }, [visible, editing]);
 
   const cfg = TYPE_CONFIG[type] ?? TYPE_CONFIG.other;
@@ -142,11 +209,11 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
-        showToast('Precisamos da permissão da galeria para adicionar fotos.', 'error');
+        showToast('Precisamos da permissão da galeria para adicionar fotos ou vídeos.', 'error');
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+        mediaTypes: ['images', 'videos'],
         allowsMultipleSelection: true,
         quality: 0.7,
         base64: true,
@@ -172,6 +239,11 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
   };
 
   const handleSubmit = () => {
+    const dateTrimmed = date.trim();
+    if (!isValidDate(dateTrimmed)) {
+      showToast('Insira uma data válida no formato AAAA-MM-DD (Ex: 2026-06-12).', 'error');
+      return;
+    }
     onSubmit({
       title, type, description,
       location: cfg.showLocation ? location : '',
@@ -180,10 +252,11 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
       rating, spotifyTrack, spotifyArtist, spotifyPreviewUrl, spotifyAlbumArt,
       photoUrls: existingUrls,
       pickedPhotos: newPhotos,
+      date: dateTrimmed,
     });
   };
 
-  const canSave = isNonEmpty(title) && !saving;
+  const canSave = isNonEmpty(title) && isNonEmpty(date) && !saving;
   const totalPhotos = existingUrls.length + newPhotos.length;
   const photoThumbs = useMemo(() => existingUrls.map(url => ({ key: url, uri: url })), [existingUrls]);
 
@@ -235,6 +308,17 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
               maxLength={LIMITS.title}
             />
 
+            {/* Data da Memória */}
+            <Text style={styles.sectionLabel}>📅 Data da memória (Ano-Mês-Dia) *</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ex: 2026-06-12"
+              placeholderTextColor="#b6a3aa"
+              value={date}
+              onChangeText={setDate}
+              maxLength={10}
+            />
+
             {/* Avaliação (só restaurante/filme) */}
             {cfg.showRating && (
               <>
@@ -280,13 +364,20 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
             <Text style={styles.sectionLabel}>🎵 Trilha sonora</Text>
             <MusicSearch trackName={spotifyTrack} artistName={spotifyArtist} onSelect={handleSelectTrack} />
 
-            {/* Fotos */}
-            <Text style={styles.sectionLabel}>📸 Fotos {totalPhotos > 0 ? `· ${totalPhotos}` : ''}</Text>
+            {/* Fotos e Vídeos */}
+            <Text style={styles.sectionLabel}>📸 Fotos e Vídeos {totalPhotos > 0 ? `· ${totalPhotos}` : ''}</Text>
             {totalPhotos > 0 && (
               <View style={styles.thumbGrid}>
                 {photoThumbs.map((p, index) => (
                   <View key={`e-${index}-${p.key}`} style={styles.thumbWrap}>
-                    <Image source={{ uri: p.uri }} style={styles.thumb} resizeMode="cover" />
+                    {isVideoUri(p.uri) ? (
+                      <View style={[styles.thumb, styles.videoThumb]}>
+                        <Text style={styles.videoPlayIcon}>▶️</Text>
+                        <Text style={styles.videoLabel}>Vídeo</Text>
+                      </View>
+                    ) : (
+                      <Image source={{ uri: p.uri }} style={styles.thumb} resizeMode="cover" />
+                    )}
                     <TouchableOpacity style={styles.thumbRemove} onPress={() => removeExisting(index)} activeOpacity={0.7}>
                       <Text style={styles.thumbRemoveText}>✕</Text>
                     </TouchableOpacity>
@@ -295,7 +386,14 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
                 ))}
                 {newPhotos.map((photo, index) => (
                   <View key={`n-${index}`} style={styles.thumbWrap}>
-                    <Image source={{ uri: photo.uri }} style={styles.thumb} resizeMode="cover" />
+                    {isVideoUri(photo.uri) ? (
+                      <View style={[styles.thumb, styles.videoThumb]}>
+                        <Text style={styles.videoPlayIcon}>▶️</Text>
+                        <Text style={styles.videoLabel}>Vídeo</Text>
+                      </View>
+                    ) : (
+                      <Image source={{ uri: photo.uri }} style={styles.thumb} resizeMode="cover" />
+                    )}
                     <TouchableOpacity style={styles.thumbRemove} onPress={() => removeNew(index)} activeOpacity={0.7}>
                       <Text style={styles.thumbRemoveText}>✕</Text>
                     </TouchableOpacity>
@@ -309,8 +407,8 @@ export function MemoryFormModal({ visible, editing, saving, onClose, onSubmit }:
 
             {Platform.OS === 'web' ? (
               <View>
-                <input type="file" accept="image/*" multiple onChange={handlePickFiles} style={WEB_FILE_INPUT_STYLE} id="file-upload-input" />
-                <label htmlFor="file-upload-input" style={WEB_FILE_LABEL_STYLE}>📸 Adicionar fotos</label>
+                <input type="file" accept="image/*,video/*" multiple onChange={handlePickFiles} style={WEB_FILE_INPUT_STYLE} id="file-upload-input" />
+                <label htmlFor="file-upload-input" style={WEB_FILE_LABEL_STYLE}>📸 Adicionar fotos/vídeos</label>
               </View>
             ) : (
               <TouchableOpacity style={styles.galleryBtn} onPress={handlePickFromGallery} activeOpacity={0.7}>
@@ -374,6 +472,9 @@ const styles = StyleSheet.create({
 
   galleryBtn: { borderWidth: 1.5, borderStyle: 'dashed', borderColor: COLORS.accent, borderRadius: RADIUS.sm, paddingVertical: 14, alignItems: 'center', backgroundColor: COLORS.bg },
   galleryBtnText: { color: COLORS.accentDeep, fontSize: 13.5, fontWeight: '600' },
+  videoThumb: { backgroundColor: '#F0EAF0', justifyContent: 'center', alignItems: 'center' },
+  videoPlayIcon: { fontSize: 24 },
+  videoLabel: { fontSize: 10, color: COLORS.muted, marginTop: 4 },
 
   footer: { flexDirection: 'row', gap: 12, paddingHorizontal: 18, paddingTop: 12, paddingBottom: 28, borderTopWidth: 0.5, borderTopColor: COLORS.border, backgroundColor: COLORS.surface },
   cancelBtn: { flex: 1, paddingVertical: 15, borderRadius: RADIUS.sm, backgroundColor: COLORS.bg, alignItems: 'center' },

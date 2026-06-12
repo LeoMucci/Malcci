@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Dimensions, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { COLORS, RADIUS } from '@/constants/theme';
@@ -20,16 +20,29 @@ const FILTERS = [
   { key: 'other', label: 'Outros ✨' },
 ] as const;
 
-const GRID_COLUMNS = 3;
-const screenWidth = Dimensions.get('window').width;
-const imageSize = (screenWidth - 40) / GRID_COLUMNS; // 3 itens por linha, padding 16, gap 4
+const GRID_GAP = 4;
+const GRID_PADDING = 8;
+
+/** Returns a responsive column count based on screen width. */
+function getColumnCount(width: number): number {
+  if (width < 360) return 2;
+  if (width < 600) return 3;
+  if (width < 900) return 4;
+  return 5;
+}
 
 export default function GalleryScreen() {
   const { showToast } = useToast();
+  const { width: windowWidth } = useWindowDimensions();
   const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<string>('all');
   const [previewPhoto, setPreviewPhoto] = useState<GalleryPhoto | null>(null);
+
+  const columns = getColumnCount(windowWidth);
+  const totalGap = GRID_GAP * (columns - 1);
+  const totalPadding = GRID_PADDING * 2;
+  const imageSize = Math.floor((windowWidth - totalPadding - totalGap) / columns);
 
   const loadPhotos = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -107,11 +120,11 @@ export default function GalleryScreen() {
         </View>
       ) : (
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <View style={styles.grid}>
+          <View style={[styles.grid, { gap: GRID_GAP }]}>
             {filteredPhotos.map(photo => (
               <TouchableOpacity
                 key={photo.id}
-                style={styles.imageWrapper}
+                style={[styles.imageWrapper, { width: imageSize, height: imageSize }]}
                 onPress={() => setPreviewPhoto(photo)}
                 activeOpacity={0.85}
               >
@@ -131,7 +144,7 @@ export default function GalleryScreen() {
         <Modal transparent visible animationType="fade" onRequestClose={handleClosePreview}>
           <View style={styles.previewOverlay}>
             <TouchableOpacity style={styles.closeOverlay} onPress={handleClosePreview} activeOpacity={1}>
-              <View style={styles.previewCard}>
+              <View style={[styles.previewCard, { maxWidth: Math.min(windowWidth - 32, 400) }]}>
                 <Image source={{ uri: previewPhoto.photo_url }} style={styles.previewImage} resizeMode="contain" />
                 <View style={styles.previewInfo}>
                   <Text style={styles.previewTitle}>{previewPhoto.title}</Text>
@@ -176,15 +189,15 @@ const styles = StyleSheet.create({
   empty: { textAlign: 'center', color: COLORS.muted, paddingVertical: 80, fontSize: 13, paddingHorizontal: 40 },
 
   scroll: { flex: 1 },
-  scrollContent: { padding: 8, paddingBottom: 30 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  imageWrapper: { width: imageSize, height: imageSize, borderRadius: RADIUS.sm, overflow: 'hidden', backgroundColor: '#efeae7' },
+  scrollContent: { padding: GRID_PADDING, paddingBottom: 30 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap' },
+  imageWrapper: { borderRadius: RADIUS.sm, overflow: 'hidden', backgroundColor: '#efeae7' },
   gridImage: { width: '100%', height: '100%', resizeMode: 'cover' },
 
   /* Fullscreen Preview modal */
   previewOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.85)', justifyContent: 'center', alignItems: 'center' },
-  closeOverlay: { flex: 1, width: '100%', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  previewCard: { width: '100%', maxWidth: 400, backgroundColor: COLORS.surface, borderRadius: RADIUS.md, overflow: 'hidden', paddingBottom: 16 },
+  closeOverlay: { flex: 1, width: '100%', justifyContent: 'center', alignItems: 'center', padding: 16 },
+  previewCard: { width: '100%', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, overflow: 'hidden', paddingBottom: 16 },
   previewImage: { width: '100%', aspectRatio: 1.1, backgroundColor: '#000' },
   previewInfo: { padding: 16, gap: 4 },
   previewTitle: { fontSize: 16, fontWeight: 'bold', color: COLORS.text },
@@ -192,3 +205,4 @@ const styles = StyleSheet.create({
   closeBtn: { marginTop: 8, alignSelf: 'center', paddingVertical: 8, paddingHorizontal: 24, borderRadius: 20, backgroundColor: COLORS.accent },
   closeBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 });
+

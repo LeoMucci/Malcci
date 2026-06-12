@@ -1,17 +1,19 @@
 // Tipos das tabelas do Supabase (snake_case espelha o schema do banco).
 // Relações aninhadas (author, comments, etc.) existem quando o select as inclui.
 
-export type MemoryType = 'restaurant' | 'movie' | 'place' | 'special' | 'shopping' | 'other';
+export type MemoryType = 'restaurant' | 'movie' | 'place' | 'special' | 'shopping' | 'date' | 'passeio' | 'travel' | 'other';
 
 export interface UserRow {
   id: number;
   username: string;
   display_name: string;
+  avatar_url?: string | null;
 }
 
 export interface AuthorRef {
   display_name: string;
   username?: string;
+  avatar_url?: string | null;
 }
 
 export interface MemoryReactionRow {

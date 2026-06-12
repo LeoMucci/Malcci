@@ -62,7 +62,7 @@ export default function LoginScreen() {
               <Text style={styles.avatarText}>L</Text>
             </View>
             <Text style={styles.userName}>Luysa</Text>
-            <Text style={styles.userRole}>Ela</Text>
+            <Text style={styles.userRole}>MomoIquilinhaNinda</Text>
           </TouchableOpacity>
 
           {/* Leonardo (Eu) */}
@@ -80,7 +80,7 @@ export default function LoginScreen() {
               <Text style={styles.avatarText}>L</Text>
             </View>
             <Text style={styles.userName}>Leonardo</Text>
-            <Text style={styles.userRole}>Eu</Text>
+            <Text style={styles.userRole}>Momobolofofo</Text>
           </TouchableOpacity>
         </View>
 

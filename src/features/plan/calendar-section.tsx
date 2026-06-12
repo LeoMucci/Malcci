@@ -3,9 +3,18 @@ import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 
 import { sharedStyles } from '@/constants/shared-styles';
 import { COLORS, RADIUS } from '@/constants/theme';
 import { LIMITS } from '@/lib/validation';
-import { addMonths, buildCalendarCells, daysUntil, findNextEvent, formatDaysLeft } from './calendar-utils';
+import { addMonths, buildCalendarCells, daysUntil, findNextEvent, formatDaysLeft, isDateInEvent } from './calendar-utils';
 import { PlanModal, planFeatureStyles } from './plan-modal';
 import { EVENT_CATEGORY_EMOJI, type CalendarEvent, type EventCategory, type EventFormData } from './types';
+
+function formatEventDateRange(eventDate: string, endDate?: string | null): string {
+  const start = new Date(`${eventDate}T12:00:00`);
+  const startStr = start.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
+  if (!endDate) return startStr;
+  const end = new Date(`${endDate}T12:00:00`);
+  const endStr = end.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' });
+  return `${startStr} até ${endStr}`;
+}
 
 const WEEKDAY_LABELS = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 
@@ -42,7 +51,12 @@ export function CalendarSection({
 
   const [formTitle, setFormTitle] = useState('');
   const [formDate, setFormDate] = useState(todayIso);
+  const [formEndDate, setFormEndDate] = useState('');
+  const [formDescription, setFormDescription] = useState('');
   const [formCategory, setFormCategory] = useState<EventCategory>('special');
+
+  const [selectedRangeStart, setSelectedRangeStart] = useState<string | null>(null);
+  const [selectedRangeEnd, setSelectedRangeEnd] = useState<string | null>(null);
 
   const cells = useMemo(() => buildCalendarCells(currentDate, events), [currentDate, events]);
   const nextEvent = useMemo(() => findNextEvent(events), [events]);
@@ -51,7 +65,7 @@ export function CalendarSection({
     [currentDate],
   );
   const selectedDateEvents = useMemo(
-    () => (selectedDate ? events.filter(e => e.eventDate === selectedDate) : []),
+    () => (selectedDate ? events.filter(e => isDateInEvent(selectedDate, e)) : []),
     [events, selectedDate],
   );
 
@@ -62,27 +76,48 @@ export function CalendarSection({
   }, []);
 
   const handleDayPress = useCallback((dateStr: string) => {
-    const hasEventsOnDay = events.some(e => e.eventDate === dateStr);
+    const hasEventsOnDay = events.some(e => isDateInEvent(dateStr, e));
     if (hasEventsOnDay) {
       setSelectedDate(dateStr);
       return;
     }
-    setFormDate(dateStr);
-    setFormTitle('');
-    onOpenAddModal();
-  }, [events, onOpenAddModal]);
+    
+    if (!selectedRangeStart || (selectedRangeStart && selectedRangeEnd)) {
+      setSelectedRangeStart(dateStr);
+      setSelectedRangeEnd(null);
+    } else {
+      if (dateStr >= selectedRangeStart) {
+        setSelectedRangeEnd(dateStr);
+      } else {
+        setSelectedRangeStart(dateStr);
+        setSelectedRangeEnd(null);
+      }
+    }
+  }, [events, selectedRangeStart, selectedRangeEnd]);
 
   const handleSubmit = useCallback(async () => {
-    const ok = await onAddEvent({ title: formTitle, eventDate: formDate, category: formCategory });
+    const ok = await onAddEvent({
+      title: formTitle,
+      eventDate: formDate,
+      endDate: formEndDate.trim() || null,
+      category: formCategory,
+      description: formDescription.trim() || null,
+    });
     if (ok) {
       onCloseAddModal();
       setFormTitle('');
+      setFormEndDate('');
+      setFormDescription('');
+      setSelectedRangeStart(null);
+      setSelectedRangeEnd(null);
     }
-  }, [onAddEvent, onCloseAddModal, formTitle, formDate, formCategory]);
+  }, [onAddEvent, onCloseAddModal, formTitle, formDate, formEndDate, formCategory, formDescription]);
 
   const handleNewEventFromDate = useCallback(() => {
     if (!selectedDate) return;
     setFormDate(selectedDate);
+    setFormEndDate('');
+    setFormDescription('');
     setFormTitle('');
     setSelectedDate(null);
     onOpenAddModal();
@@ -114,10 +149,20 @@ export function CalendarSection({
           ))}
           {cells.map((cell, i) => {
             const isToday = todayKey === new Date(`${cell.dateStr}T12:00:00`).toDateString();
+            const isRangeStart = cell.dateStr === selectedRangeStart;
+            const isRangeEnd = cell.dateStr === selectedRangeEnd;
+            const isWithinRange = !!(selectedRangeStart && selectedRangeEnd && cell.dateStr > selectedRangeStart && cell.dateStr < selectedRangeEnd);
+
             return (
               <TouchableOpacity
                 key={`day-${i}`}
-                style={[styles.calDay, !cell.currentMonth && styles.calDayOther, isToday && styles.calDayToday]}
+                style={[
+                  styles.calDay,
+                  !cell.currentMonth && styles.calDayOther,
+                  isToday && styles.calDayToday,
+                  (isRangeStart || isRangeEnd) && styles.calDaySelected,
+                  isWithinRange && styles.calDayInRange,
+                ]}
                 onPress={() => handleDayPress(cell.dateStr)}
                 activeOpacity={0.7}
               >
@@ -126,18 +171,53 @@ export function CalendarSection({
                     styles.calDayText,
                     !cell.currentMonth && styles.calDayTextOther,
                     isToday && styles.calDayTextToday,
+                    (isRangeStart || isRangeEnd) && styles.calDayTextSelected,
+                    isWithinRange && styles.calDayTextInRange,
                   ]}
                 >
                   {cell.day}
                 </Text>
                 {cell.hasEvents && (
-                  <View style={[styles.calDot, { backgroundColor: isToday ? '#fff' : COLORS.accent }]} />
+                  <View style={[styles.calDot, { backgroundColor: (isToday || isRangeStart || isRangeEnd) ? '#fff' : COLORS.accent }]} />
                 )}
               </TouchableOpacity>
             );
           })}
         </View>
       </View>
+
+      {/* Faixa de Seleção de Range */}
+      {selectedRangeStart && (
+        <View style={styles.rangeInfoCard}>
+          <Text style={styles.rangeInfoText} numberOfLines={1}>
+            📅 Selecionado: {new Date(`${selectedRangeStart}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
+            {selectedRangeEnd && ` até ${new Date(`${selectedRangeEnd}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}`}
+          </Text>
+          <View style={styles.rangeActions}>
+            <TouchableOpacity
+              style={styles.rangeClearBtn}
+              onPress={() => {
+                setSelectedRangeStart(null);
+                setSelectedRangeEnd(null);
+              }}
+            >
+              <Text style={styles.rangeClearText}>Limpar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.rangeConfirmBtn}
+              onPress={() => {
+                setFormDate(selectedRangeStart);
+                setFormEndDate(selectedRangeEnd ?? '');
+                setFormDescription('');
+                setFormTitle('');
+                onOpenAddModal();
+              }}
+            >
+              <Text style={styles.rangeConfirmText}>Criar Evento</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Próximo evento */}
       {nextEvent && (
@@ -166,8 +246,11 @@ export function CalendarSection({
           <View style={styles.flex1}>
             <Text style={styles.eventListTitle}>{ev.title}</Text>
             <Text style={styles.eventListSub}>
-              {new Date(`${ev.eventDate}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}
+              {formatEventDateRange(ev.eventDate, ev.endDate)}
             </Text>
+            {!!ev.description && (
+              <Text style={styles.eventListDesc}>{ev.description}</Text>
+            )}
           </View>
           <TouchableOpacity onPress={() => onDeleteEvent(ev.id)} activeOpacity={0.7}>
             <Text style={styles.delIcon}>🗑️</Text>
@@ -197,12 +280,29 @@ export function CalendarSection({
           maxLength={LIMITS.title}
         />
 
-        <Text style={sharedStyles.label}>Data</Text>
+        <Text style={sharedStyles.label}>Data de Início</Text>
         <TextInput
           style={sharedStyles.input}
           placeholder="YYYY-MM-DD"
           value={formDate}
           onChangeText={setFormDate}
+        />
+
+        <Text style={sharedStyles.label}>Data de Fim (opcional)</Text>
+        <TextInput
+          style={sharedStyles.input}
+          placeholder="YYYY-MM-DD"
+          value={formEndDate}
+          onChangeText={setFormEndDate}
+        />
+
+        <Text style={sharedStyles.label}>Notas / Descrição (opcional)</Text>
+        <TextInput
+          style={[sharedStyles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+          placeholder="Ex: Reservar restaurante, detalhes do evento..."
+          value={formDescription}
+          onChangeText={setFormDescription}
+          multiline
         />
 
         <Text style={sharedStyles.label}>Categoria</Text>
@@ -246,6 +346,12 @@ export function CalendarSection({
               <Text style={styles.eventEmoji}>{EVENT_CATEGORY_EMOJI[ev.category]}</Text>
               <View style={[styles.flex1, styles.dateEventTitle]}>
                 <Text style={styles.eventListTitle}>{ev.title}</Text>
+                {ev.endDate && (
+                  <Text style={styles.eventListSub}>{formatEventDateRange(ev.eventDate, ev.endDate)}</Text>
+                )}
+                {!!ev.description && (
+                  <Text style={styles.eventListDesc}>{ev.description}</Text>
+                )}
               </View>
               <TouchableOpacity onPress={() => handleDeleteFromDateModal(ev.id)}>
                 <Text style={styles.delIconDanger}>🗑️</Text>
@@ -305,4 +411,31 @@ const styles = StyleSheet.create({
   dateEventsList: { maxHeight: 200, marginBottom: 16 },
   dateEventCard: { marginBottom: 8, borderWidth: 0, backgroundColor: COLORS.bg },
   dateEventTitle: { marginLeft: 8 },
+
+  calDaySelected: { backgroundColor: COLORS.accent, borderRadius: 8 },
+  calDayInRange: { backgroundColor: COLORS.accentSoft, borderRadius: 0 },
+  calDayTextSelected: { color: '#fff', fontWeight: '600' },
+  calDayTextInRange: { color: COLORS.accentDeep },
+
+  rangeInfoCard: {
+    backgroundColor: COLORS.surface,
+    borderWidth: 0.5,
+    borderColor: COLORS.border,
+    borderRadius: RADIUS.sm,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginHorizontal: 2,
+    marginTop: -8,
+    marginBottom: 8,
+  },
+  rangeInfoText: { fontSize: 12.5, color: COLORS.text, fontWeight: '500', flex: 1 },
+  rangeActions: { flexDirection: 'row', gap: 6 },
+  rangeClearBtn: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: 10, backgroundColor: COLORS.bg },
+  rangeClearText: { fontSize: 11, color: COLORS.muted, fontWeight: '500' },
+  rangeConfirmBtn: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: 10, backgroundColor: COLORS.accent },
+  rangeConfirmText: { fontSize: 11, color: '#fff', fontWeight: '600' },
+  eventListDesc: { fontSize: 12, color: COLORS.muted, marginTop: 4, fontStyle: 'italic' },
 });

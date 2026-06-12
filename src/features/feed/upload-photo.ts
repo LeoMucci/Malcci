@@ -12,19 +12,33 @@ export interface UploadedPhoto {
 
 function extFromPhoto(fileName?: string | null, mimeType?: string | null): string {
   if (fileName && fileName.includes('.')) return fileName.split('.').pop() as string;
-  if (mimeType?.includes('png')) return 'png';
-  if (mimeType?.includes('webp')) return 'webp';
-  if (mimeType?.includes('heic')) return 'heic';
+  const mime = mimeType?.toLowerCase() || '';
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('heic')) return 'heic';
+  if (mime.includes('mp4')) return 'mp4';
+  if (mime.includes('mov')) return 'mov';
+  if (mime.includes('video')) return 'mp4';
   return 'jpg';
 }
 
 export async function uploadPickedPhoto(photo: PickedPhoto): Promise<UploadedPhoto> {
-  if (!photo.base64) throw new Error('Imagem sem dados para enviar.');
   const ext = extFromPhoto(photo.fileName, photo.mimeType);
   const path = `memories/${Date.now()}-${Math.floor(Math.random() * 100000)}.${ext}`;
+  
+  let body: any;
+  if (photo.base64) {
+    body = decode(photo.base64);
+  } else {
+    // Sincroniza via blob para arquivos grandes ou vídeos no React Native
+    const response = await fetch(photo.uri);
+    body = await response.blob();
+  }
+
   const { error } = await supabase.storage
     .from('memories')
-    .upload(path, decode(photo.base64), { contentType: photo.mimeType ?? 'image/jpeg' });
+    .upload(path, body, { contentType: photo.mimeType ?? 'image/jpeg' });
+
   if (error) throw error;
   const { data } = supabase.storage.from('memories').getPublicUrl(path);
   return { url: data.publicUrl, key: path };

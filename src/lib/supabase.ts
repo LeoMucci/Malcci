@@ -1,6 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// Polyfill WebSocket for Node.js environments (like SSR/Build) under Node < 22
+if (typeof window === 'undefined' && typeof globalThis.WebSocket === 'undefined') {
+  class DummyWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+    readyState = 3; // CLOSED
+    close() {}
+    send() {}
+  }
+  (globalThis as any).WebSocket = DummyWebSocket;
+}
+
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
 

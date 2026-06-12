@@ -9,7 +9,12 @@ const MAX_VISIBLE_REACTIONS = 3;
 const CATEGORY_EMOJI: Record<string, string> = {
   restaurant: '🍽️',
   movie: '🎬',
-  place: '🏖️',
+  place: '📍',
+  special: '💖',
+  shopping: '🛍️',
+  date: '🌹',
+  passeio: '🗺️',
+  travel: '✈️',
 };
 const DEFAULT_CATEGORY_EMOJI = '✨';
 
